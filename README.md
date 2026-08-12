@@ -9,10 +9,11 @@ a perspective rarely explored when working primarily at the enterprise managemen
 
 The SNMP agent (from-scratch BER codec, MIB registry, GET/GETNEXT/SET/GETBULK/TRAP
 handling, and a pluggable security-model layer ready for SNMPv3) is implemented and
-tested; the ESP-IDF firmware build (transport, hardware drivers, WiFi bring-up) is
-written but not yet flashed to physical hardware. See [`docs/PLAN.md`](docs/PLAN.md)
-for the full design and [`docs/testing.md`](docs/testing.md) for real integration-test
-sessions against the agent.
+tested; the full ESP-IDF firmware (transport, hardware drivers, WiFi bring-up) builds
+cleanly for `esp32s3` in CI (`.github/workflows/idf-build.yml`) but has not yet been
+flashed to physical hardware. See [`docs/PLAN.md`](docs/PLAN.md) for the full design
+and [`docs/testing.md`](docs/testing.md) for real integration-test sessions against
+the agent.
 
 ## Repository layout
 

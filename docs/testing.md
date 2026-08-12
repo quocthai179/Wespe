@@ -49,6 +49,21 @@ and a max-varbind-count request — all confirmed to be handled safely
 (no crash, no buffer overrun, response never exceeds the caller's
 buffer) under the sanitizers.
 
+### ESP-IDF compile check
+
+`.github/workflows/idf-build.yml` builds the *entire* firmware —
+including the ESP-IDF-only pieces host_tests/ can't touch (`transport`,
+`device_hal`, `main`) — against the real `espressif/idf:v5.3` toolchain
+for `esp32s3`. This is compile-only (nothing is flashed or run; no
+hardware-in-the-loop), but it caught a real bug during development: the
+hardware-abstraction component was originally named `hal`, which
+silently shadowed ESP-IDF's own built-in `hal` component (chip-level
+headers like `hal/sha_types.h`, pulled in by mbedtls) and broke the
+build with a `fatal error: hal/sha_types.h: No such file or directory`
+nowhere near any of our own code. Renamed to `device_hal` (see
+`components/mib/CMakeLists.txt`'s comment); CI is green as of the
+current `HEAD`.
+
 ## 2. MIB linting
 
 ```
