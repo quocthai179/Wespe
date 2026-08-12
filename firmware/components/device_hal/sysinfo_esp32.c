@@ -1,4 +1,4 @@
-/* System/device telemetry backend for hal/sysinfo.h. Unlike sensor/relay,
+/* System/device telemetry backend for device_hal/sysinfo.h. Unlike sensor/relay,
  * there's no mock variant -- these ESP-IDF system APIs work identically
  * regardless of what (if anything) is wired up. */
 #include "sysinfo.h"

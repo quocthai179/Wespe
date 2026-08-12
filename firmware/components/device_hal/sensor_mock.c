@@ -1,4 +1,4 @@
-/* Mock backend for hal/sensor.h, for bring-up/simulation before real
+/* Mock backend for device_hal/sensor.h, for bring-up/simulation before real
  * hardware is wired up (Kconfig WESPE_HAL_MOCK). Returns a fixed
  * plausible reading so the WESPE-MIB objects and the SNMP path around
  * them can be exercised end to end without a DS18B20 attached. */

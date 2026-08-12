@@ -14,7 +14,7 @@ mostly matches.
         ┌──────────────┼───────────────┬───────────────┐
         ▼              ▼               ▼               ▼
   ┌───────────┐  ┌───────────┐   ┌───────────┐   ┌───────────┐
-  │ transport │  │ snmp_core │   │    mib    │   │    hal    │
+  │ transport │  │ snmp_core │   │    mib    │   │device_hal │
   │ (ESP-IDF/ │─▶│ (portable)│──▶│ (portable)│──▶│ (ESP-IDF/ │
   │  sockets) │  │           │   │           │   │  mock)    │
   └───────────┘  └─────┬─────┘   └─────┬─────┘   └───────────┘
@@ -27,7 +27,12 @@ mostly matches.
 
 "Portable" = zero ESP-IDF/FreeRTOS dependency, builds as plain host C (see
 `host_tests/CMakeLists.txt`). Only `transport` and the real (non-mock)
-`hal` backends touch ESP-IDF/lwIP APIs directly. This is what makes
+`device_hal` backends touch ESP-IDF/lwIP APIs directly. (Named
+`device_hal`, not `hal` — ESP-IDF ships its own built-in component
+literally called `hal`, and a project component of the same name
+silently shadows it, breaking mbedtls and anything else that expects the
+real one. Found via a failing CI build; see `components/mib/CMakeLists.txt`'s
+comment.) This is what makes
 `tools/dev_agent/dev_agent.c` possible: it links `ber` + `mib` +
 `snmp_core` unmodified and swaps in a plain POSIX-socket transport and
 in-memory MIB bindings — a full agent, running as an ordinary Linux
@@ -72,8 +77,8 @@ backwards; there's a full derivation there plus round-trip tests).
 a pointer-based tree buys nothing but heap-fragmentation risk; binary
 search on a `const` array is O(log n), trivially testable, and — because
 only the getter/setter function pointers vary — is exactly what makes
-`hal/sensor_mock.c` swap in for `hal/sensor_ds18b20.c` without touching
-any SNMP code. See `mib_registry.c`.
+`device_hal/sensor_mock.c` swap in for `device_hal/sensor_ds18b20.c`
+without touching any SNMP code. See `mib_registry.c`.
 
 **Security-model dispatch table = the SNMPv3 extension point.** PDU
 handlers and the MIB layer never see a raw community string — only an
@@ -108,6 +113,6 @@ overflowing a fixed buffer. See `snmp_pdu_getbulk.c`.
   the v3-readiness extension point and its only current implementation.
 - `components/mib/mib_registry.c` — the OID lookup/walk data structure.
 - `components/mib/mib_wespe.c` — where protocol meets hardware, via
-  `hal/`.
+  `device_hal/`.
 - `mibs/WESPE-MIB.txt` — authoritative OID documentation; must stay in
   sync with `mib_ii.c`/`mib_wespe.c` by hand (no code generation).

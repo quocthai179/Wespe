@@ -6,14 +6,14 @@ The owner specified the board (**ESP32-S3**) but not the exact
 temperature sensor or relay module. Everything below is a **reasonable
 default assumption**, not a confirmed BOM — swap it out once real parts
 are chosen, and update `CONFIG_WESPE_DS18B20_GPIO`/`CONFIG_WESPE_RELAY_GPIO`
-(`firmware/main/Kconfig.projbuild`) accordingly. Nothing above the `hal/`
+(`firmware/main/Kconfig.projbuild`) accordingly. Nothing above the `device_hal/`
 layer needs to change either way (see `docs/architecture.md`).
 
 Until then, build with `CONFIG_WESPE_HAL_MOCK=y` (menuconfig: *Wespe SNMP
 Agent Configuration → Use mock sensor/relay*) to exercise the whole SNMP
 agent — including `wespeTemperature` and `wespeRelayState` — on a bare
-ESP32-S3 dev board with nothing wired up at all. `hal/sensor_mock.c`
-returns a fixed 23.5°C; `hal/relay_mock.c` just remembers the commanded
+ESP32-S3 dev board with nothing wired up at all. `device_hal/sensor_mock.c`
+returns a fixed 23.5°C; `device_hal/relay_mock.c` just remembers the commanded
 state in RAM.
 
 ## Assumed parts

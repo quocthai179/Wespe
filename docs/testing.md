@@ -83,7 +83,7 @@ check either way.
 ### The `dev_agent` trick
 
 `tools/dev_agent/dev_agent.c` links the exact same `components/ber`,
-`components/mib`-shaped object bindings (in-memory instead of `hal/`
+`components/mib`-shaped object bindings (in-memory instead of `device_hal/`
 hardware), and `components/snmp_core` sources as the firmware, behind a
 plain POSIX UDP socket instead of lwIP — a full agent that runs as an
 ordinary Linux process:

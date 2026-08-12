@@ -2,7 +2,7 @@
  * driven from one GPIO through a driver transistor (active-high assumed;
  * flip the level writes below if your module is active-low). Selected
  * instead of relay_mock.c when Kconfig WESPE_HAL_MOCK is disabled -- see
- * components/hal/CMakeLists.txt. */
+ * components/device_hal/CMakeLists.txt. */
 #include "relay.h"
 #include "driver/gpio.h"
 #include "sdkconfig.h"

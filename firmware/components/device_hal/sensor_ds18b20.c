@@ -1,6 +1,6 @@
 /* Real hardware backend for hal/sensor.h: a bit-banged DS18B20 1-Wire
  * driver. Selected instead of sensor_mock.c when Kconfig
- * WESPE_HAL_MOCK is disabled -- see components/hal/CMakeLists.txt.
+ * WESPE_HAL_MOCK is disabled -- see components/device_hal/CMakeLists.txt.
  *
  * A DS18B20 conversion takes up to ~750ms, which would stall the SNMP UDP
  * task for that long if done inline on every GET -- unacceptable for a

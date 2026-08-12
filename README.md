@@ -17,7 +17,7 @@ sessions against the agent.
 ## Repository layout
 
 ```
-firmware/     ESP-IDF project (components/ber, mib, snmp_core, transport, hal; main/)
+firmware/     ESP-IDF project (components/ber, mib, snmp_core, transport, device_hal; main/)
 host_tests/   Native unit tests for the hardware-independent protocol core
 mibs/         WESPE-MIB.txt, the authoritative SMIv2 MIB module
 tools/        pysnmp integration script, fuzz replay tooling, dev_agent (see below)
@@ -56,7 +56,7 @@ toolchain targeting `esp32s3`:
 cd firmware
 idf.py set-target esp32s3
 idf.py menuconfig   # under "Wespe SNMP Agent Configuration": WiFi credentials,
-                     # community strings, GPIOs (or enable mock hal/ for bring-up
+                     # community strings, GPIOs (or enable mock device_hal/ for bring-up
                      # without a sensor/relay wired up yet -- see docs/hardware-wiring.md)
 idf.py build flash monitor
 ```

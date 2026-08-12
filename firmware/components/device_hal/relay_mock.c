@@ -1,4 +1,4 @@
-/* Mock backend for hal/relay.h, for bring-up/simulation before real
+/* Mock backend for device_hal/relay.h, for bring-up/simulation before real
  * hardware is wired up (Kconfig WESPE_HAL_MOCK). Just remembers the
  * commanded state in RAM -- enough to exercise SetRequest/GetRequest end
  * to end without a physical relay attached. */

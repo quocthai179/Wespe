@@ -1,6 +1,6 @@
 /* Custom WESPE-MIB objects (1.3.6.1.4.1.99999 -- see mibs/WESPE-MIB.txt).
  * This is the seam between protocol code and real hardware: every getter/
- * setter here calls only into hal/ (sensor.h, relay.h, sysinfo.h), never
+ * setter here calls only into device_hal/ (sensor.h, relay.h, sysinfo.h), never
  * touches a GPIO/1-Wire/ADC register directly, so swapping
  * sensor_ds18b20.c for sensor_mock.c (Kconfig-selected) changes nothing
  * above this file. */

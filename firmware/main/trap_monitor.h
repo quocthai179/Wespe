@@ -11,10 +11,10 @@ extern "C" {
  * mibs/WESPE-MIB.txt) through snmp_transport_send_trap() whenever relay
  * state changes or the configured temperature threshold is crossed (with
  * hysteresis, so a reading dithering right at the boundary doesn't spam
- * traps). Deliberately polling-based rather than event-driven: hal/
+ * traps). Deliberately polling-based rather than event-driven: device_hal/
  * exposes plain getters with no callback/observer mechanism, which keeps
  * it simple and keeps this "when do we notify" policy entirely in
- * application code (main/) rather than leaking into hal/ or mib/. Call
+ * application code (main/) rather than leaking into device_hal/ or mib/. Call
  * once, after snmp_transport_set_trap_destination(). */
 void trap_monitor_start(void);
 
