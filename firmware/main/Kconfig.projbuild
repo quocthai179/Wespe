@@ -1,0 +1,79 @@
+menu "Wespe SNMP Agent Configuration"
+
+    config WESPE_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help
+            SSID of the WiFi network Wespe should join.
+
+    config WESPE_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+        help
+            WPA2-PSK password for CONFIG_WESPE_WIFI_SSID.
+
+    config WESPE_HAL_MOCK
+        bool "Use mock sensor/relay (no hardware attached)"
+        default n
+        help
+            When enabled, links sensor_mock.c/relay_mock.c instead of the
+            real DS18B20/GPIO-relay drivers, so the SNMP agent and its MIB
+            can be exercised on a plain dev board before any sensor or
+            relay is wired up.
+
+    config WESPE_DS18B20_GPIO
+        int "DS18B20 1-Wire data GPIO"
+        default 4
+        depends on !WESPE_HAL_MOCK
+        help
+            GPIO the DS18B20's DQ line is connected to (with a ~4.7k
+            pull-up to 3V3, per the datasheet).
+
+    config WESPE_RELAY_GPIO
+        int "Relay control GPIO"
+        default 5
+        depends on !WESPE_HAL_MOCK
+        help
+            GPIO driving the relay module's IN pin (through whatever
+            level-shifting/driver transistor the module needs).
+
+    config WESPE_SNMP_RO_COMMUNITY
+        string "Read-only SNMP community string"
+        default "public"
+        help
+            Grants GET/GETNEXT/GETBULK access. The "public" default is
+            fine for a lab/demo device; change it before exposing this
+            agent beyond a trusted network.
+
+    config WESPE_SNMP_RW_COMMUNITY
+        string "Read-write SNMP community string"
+        default "private"
+        help
+            Grants GET/GETNEXT/GETBULK/SET access. Same caveat as
+            CONFIG_WESPE_SNMP_RO_COMMUNITY, more so.
+
+    config WESPE_TRAP_DEST_IP
+        string "Trap receiver IPv4 address"
+        default ""
+        help
+            Where coldStart / relay-change / temperature-threshold traps
+            are sent, on UDP port 162. Leave blank to disable trap
+            sending entirely.
+
+    config WESPE_TEMP_THRESHOLD_DECIDEGREES
+        int "Temperature trap threshold (tenths of a degree C)"
+        default 300
+        help
+            wespeTemperatureThresholdTrap fires when the reading crosses
+            up through this value. 300 = 30.0C.
+
+    config WESPE_TEMP_THRESHOLD_HYSTERESIS_DECIDEGREES
+        int "Temperature trap hysteresis (tenths of a degree C)"
+        default 5
+        help
+            The reading must drop back below (threshold - this value)
+            before another upward crossing can re-trigger the trap --
+            avoids trap spam from a reading dithering right at the
+            boundary.
+
+endmenu

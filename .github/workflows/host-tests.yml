@@ -1,0 +1,21 @@
+name: Host Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (native, no ESP-IDF toolchain needed)
+        run: cmake -S host_tests -B host_tests/build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build (ASan/UBSan-instrumented, -Wall -Wextra -Werror)
+        run: cmake --build host_tests/build -j
+
+      - name: Run tests
+        run: ctest --test-dir host_tests/build --output-on-failure

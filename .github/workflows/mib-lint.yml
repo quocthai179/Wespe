@@ -1,0 +1,25 @@
+name: MIB Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smilint:
+    runs-on: ubuntu-latest
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install smitools + standard IETF MIBs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y smitools snmp-mibs-downloader
+
+      - name: Lint WESPE-MIB (fails on real errors; severity-5 style notes are tolerated)
+        run: |
+          SMIPATH=/var/lib/mibs/ietf smilint -s -l 6 \
+            -p SNMPv2-SMI -p SNMPv2-TC -p SNMPv2-CONF \
+            mibs/WESPE-MIB.txt

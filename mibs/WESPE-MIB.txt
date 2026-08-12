@@ -1,0 +1,172 @@
+WESPE-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE,
+    Integer32, Gauge32, enterprises
+        FROM SNMPv2-SMI
+    MODULE-COMPLIANCE, OBJECT-GROUP, NOTIFICATION-GROUP
+        FROM SNMPv2-CONF;
+
+wespeMIB MODULE-IDENTITY
+    LAST-UPDATED "202608120000Z"
+    ORGANIZATION "Wespe project"
+    CONTACT-INFO
+        "Thai Huynh
+         https://github.com/quocthai179/Wespe"
+    DESCRIPTION
+        "Private enterprise MIB for Wespe, a from-scratch SNMP agent
+         running on an ESP32-S3 that exposes real sensor/actuator state
+         (temperature, a controllable relay) alongside device telemetry,
+         so an SNMP-polling engine can be validated against genuine
+         hardware and UDP traffic instead of a simulator.
+
+         The enterprise number 99999 used here is a PLACEHOLDER, not a
+         real IANA-assigned Private Enterprise Number -- see
+         docs/v3-readiness.md and docs/mib-design.md open items. Replace
+         it (and regenerate this module together with
+         firmware/components/mib/mib_ii.c and mib_wespe.c's OID tables,
+         which must stay in exact sync with it) before relying on this
+         MIB outside a lab/demo setting where OID collisions with
+         someone else's placeholder enterprise number don't matter."
+    REVISION "202608120000Z"
+    DESCRIPTION
+        "Initial version."
+    ::= { enterprises 99999 }
+
+-- ============================================================
+-- Top-level structure
+-- ============================================================
+
+wespeAgent       OBJECT IDENTIFIER ::= { wespeMIB 1 }
+wespeObjects     OBJECT IDENTIFIER ::= { wespeMIB 2 }
+wespeTraps       OBJECT IDENTIFIER ::= { wespeMIB 3 }
+wespeConformance OBJECT IDENTIFIER ::= { wespeMIB 4 }
+
+-- wespeAgent.1 is this firmware's sysObjectID value (see mib_ii.c's
+-- get_sys_object_id()); it identifies "a Wespe ESP32-S3 agent" as a
+-- product, distinct from any individual object below.
+wespeAgentESP32S3 OBJECT IDENTIFIER ::= { wespeAgent 1 }
+
+-- ============================================================
+-- wespeObjects
+-- ============================================================
+
+wespeTemperature OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Current temperature reading, in tenths of a degree Celsius
+         (e.g. 235 = 23.5C). SNMP has no native floating-point type,
+         hence the fixed-point encoding. Sourced from a DS18B20 1-Wire
+         sensor (or a fixed mock value in bring-up/simulation builds --
+         see docs/hardware-wiring.md); a GetRequest returns genErr if no
+         reading has been taken yet (e.g. immediately after boot, before
+         the background polling task's first sample completes)."
+    ::= { wespeObjects 1 }
+
+wespeRelayState OBJECT-TYPE
+    SYNTAX      INTEGER { off(0), on(1) }
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Current state of the controllable relay. Writable via
+         SetRequest using the read-write community string -- this is the
+         object that demonstrates SNMP SET actuating real hardware."
+    ::= { wespeObjects 2 }
+
+wespeUptimeSeconds OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "seconds"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Seconds since the agent last (re)booted. A plain-seconds
+         convenience alongside the standard sysUpTime.0 (RFC1213), which
+         is expressed in hundredths of a second."
+    ::= { wespeObjects 3 }
+
+wespeFreeHeapBytes OBJECT-TYPE
+    SYNTAX      Gauge32
+    UNITS       "bytes"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Current free heap, in bytes, as reported by ESP-IDF. A basic
+         device-health indicator."
+    ::= { wespeObjects 4 }
+
+wespeWifiRssi OBJECT-TYPE
+    SYNTAX      Integer32 (-128..0)
+    UNITS       "dBm"
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Received signal strength of the agent's WiFi association, in
+         dBm. A GetRequest returns genErr if the agent is not currently
+         associated with an access point."
+    ::= { wespeObjects 5 }
+
+-- ============================================================
+-- wespeTraps: notifications are direct children of this node (the
+-- common convention in modern private-enterprise MIBs; see e.g. IF-MIB's
+-- linkDown/linkUp under snmpTraps), not nested under a reserved ".0" arc.
+-- ============================================================
+
+wespeRelayStateChangeTrap NOTIFICATION-TYPE
+    OBJECTS { wespeRelayState }
+    STATUS  current
+    DESCRIPTION
+        "Sent whenever wespeRelayState changes, whether from a
+         SetRequest or a future local physical control. Carries the new
+         state as its sole application varbind, alongside the standard
+         sysUpTime.0 / snmpTrapOID.0 pair every SNMPv2-Trap includes."
+    ::= { wespeTraps 1 }
+
+wespeTemperatureThresholdTrap NOTIFICATION-TYPE
+    OBJECTS { wespeTemperature }
+    STATUS  current
+    DESCRIPTION
+        "Sent when wespeTemperature crosses up through the agent's
+         configured threshold. Re-arms only once the reading drops back
+         below (threshold - hysteresis), to avoid repeated traps from a
+         reading dithering right at the boundary -- both values are
+         firmware build-time/Kconfig settings, not separate MIB objects
+         in this revision."
+    ::= { wespeTraps 2 }
+
+-- ============================================================
+-- Conformance (informational: this agent doesn't check compliance at
+-- runtime; see docs/testing.md for how smilint/net-snmp validate this
+-- module against the agent's actual wire behavior).
+-- ============================================================
+
+wespeObjectGroup OBJECT-GROUP
+    OBJECTS {
+        wespeTemperature,
+        wespeRelayState,
+        wespeUptimeSeconds,
+        wespeFreeHeapBytes,
+        wespeWifiRssi
+    }
+    STATUS  current
+    DESCRIPTION
+        "All scalar objects defined by WESPE-MIB."
+    ::= { wespeConformance 1 }
+
+wespeNotificationGroup NOTIFICATION-GROUP
+    NOTIFICATIONS { wespeRelayStateChangeTrap, wespeTemperatureThresholdTrap }
+    STATUS  current
+    DESCRIPTION
+        "All notifications defined by WESPE-MIB."
+    ::= { wespeConformance 2 }
+
+wespeCompliance MODULE-COMPLIANCE
+    STATUS  current
+    DESCRIPTION
+        "Compliance statement for agents implementing WESPE-MIB."
+    MODULE
+        MANDATORY-GROUPS { wespeObjectGroup, wespeNotificationGroup }
+    ::= { wespeConformance 3 }
+
+END
