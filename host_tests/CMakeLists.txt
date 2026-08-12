@@ -61,3 +61,10 @@ wespe_add_test(test_ber_decode ber_host)
 wespe_add_test(test_mib_registry mib_host)
 wespe_add_test(test_snmp_message snmp_core_host)
 wespe_add_test(test_fuzz_corpus snmp_core_host)
+
+# Standalone local dev/demo agent -- a real, runnable (non-test) UDP SNMP
+# server for exercising the agent with real tools (snmpget/snmpwalk/
+# snmpset/snmpbulkwalk, pysnmp) without any ESP32 hardware. Not part of
+# `ctest`; see tools/dev_agent/dev_agent.c and docs/testing.md.
+add_executable(dev_agent ${CMAKE_SOURCE_DIR}/../tools/dev_agent/dev_agent.c)
+target_link_libraries(dev_agent PRIVATE snmp_core_host)

@@ -1,0 +1,26 @@
+name: ESP-IDF Build
+
+# Compile-only: confirms firmware/ builds clean for esp32s3 on every push/
+# PR. No hardware-in-the-loop (nothing is flashed or run) -- that's what
+# host-tests.yml + docs/testing.md's manual net-snmp/pysnmp sessions
+# against tools/dev_agent/dev_agent.c are for.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build firmware (esp32s3)
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cd firmware
+          idf.py set-target esp32s3
+          idf.py build

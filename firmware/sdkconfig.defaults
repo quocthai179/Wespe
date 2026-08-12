@@ -1,0 +1,14 @@
+# Defaults for `idf.py set-target esp32s3 && idf.py menuconfig`. Anything
+# not listed here keeps ESP-IDF's stock default for the target.
+CONFIG_IDF_TARGET="esp32s3"
+
+# app_main() does WiFi bring-up + MIB/security registration before
+# handing off to the SNMP UDP task (which has its own, separately-sized
+# stack -- see components/transport/snmp_udp.c); a little extra headroom
+# on the main task avoids surprises during that sequence.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+
+# A basic single-app, non-OTA partition table (see partitions.csv) is
+# plenty for this project's current scope.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
