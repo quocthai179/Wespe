@@ -1,0 +1,14 @@
+# Host-native test build (host_tests/CMakeLists.txt)
+host_tests/build/
+
+# ESP-IDF build artifacts
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+
+# Editor/OS cruft
+.vscode/
+.DS_Store
+*.swp
