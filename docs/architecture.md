@@ -19,8 +19,8 @@ mostly matches.
   │  sockets) │  │           │   │           │   │  mock)    │
   └───────────┘  └─────┬─────┘   └─────┬─────┘   └───────────┘
                        ▼               ▼
-                  ┌───────────┐  (registry, mib_ii, mib_wespe)
-                  │    ber    │
+                  ┌───────────┐  (registry, mib_ii, mib_wespe,
+                  │    ber    │   mib_iftable, mib_sensor_table)
                   │ (portable)│
                   └───────────┘
 ```
@@ -52,9 +52,10 @@ process, that real SNMP clients can talk to. See
    (`snmp_codec.c`'s `snmp_decode_request_pdu()`), producing a
    version-neutral `snmp_pdu_ctx_t`.
 4. `snmp_dispatch_pdu()` routes on PDU tag to
-   `snmp_pdu_get.c`/`snmp_pdu_set.c`/`snmp_pdu_getbulk.c`, which look
-   objects up via `mib_registry_find()`/`mib_registry_find_next()` and
-   call their getter/setter function pointers.
+   `snmp_pdu_get.c`/`snmp_pdu_set.c`/`snmp_pdu_getbulk.c`, which resolve
+   OIDs via `mib_registry_resolve()`/`mib_registry_resolve_next()` —
+   scalars and conceptual-table cells alike, through one interface (see
+   "Conceptual tables" below) — and call the resolved getter/setter.
 5. The model's `prepare_outgoing()` encodes the response, and
    `snmp_message_process()` hands the bytes back to the transport to
    `sendto()`.
@@ -73,12 +74,43 @@ Same technique as mbedTLS's `asn1write.c`. See `ber_encode.c`'s module
 comment for the exact prepend-ordering rules (they're easy to get
 backwards; there's a full derivation there plus round-trip tests).
 
-**Flat sorted-array MIB registry**, not a tree. At ~15-25 objects total,
-a pointer-based tree buys nothing but heap-fragmentation risk; binary
-search on a `const` array is O(log n), trivially testable, and — because
-only the getter/setter function pointers vary — is exactly what makes
-`device_hal/sensor_mock.c` swap in for `device_hal/sensor_ds18b20.c`
-without touching any SNMP code. See `mib_registry.c`.
+**Flat sorted-array MIB registry**, not a pointer-based tree. At the
+scalar-object count involved, a tree buys nothing but heap-fragmentation
+risk; binary search on a `const` array is O(log n), trivially testable,
+and — because only the getter/setter function pointers vary — is exactly
+what makes `device_hal/sensor_mock.c` swap in for
+`device_hal/sensor_ds18b20.c` without touching any SNMP code. See
+`mib_registry.c`.
+
+**Conceptual (indexed) tables, resolved through the same interface as
+scalars.** `mib_registry_resolve()`/`_resolve_next()` (`mib_tree.h`)
+return a version-neutral `mib_resolved_t` whether the OID named a scalar
+or a table cell, so `snmp_core`'s PDU handlers never branch on which kind
+they're looking at. A table (`mib_table_t`, `mib_table.h`) is column
+definitions plus row-iteration/cell-access callbacks — no `SEQUENCE OF`/
+`INDEX` machinery to hand-roll per table, and rows are explicitly allowed
+to appear or disappear between calls (`mib_iftable.c`'s WiFi interface is
+permanently one row; `mib_sensor_table.c`'s row count can genuinely vary,
+see `tools/demo.sh`). The GETNEXT/GETBULK walk order across a table is
+column-major (every cell in an earlier column sorts before every cell in
+a later one, regardless of row index) — see `mib_registry.c`'s
+`table_find_next()` for the proof this is globally correct without an
+O(rows × columns) comparison on every step.
+
+**Counter64 does not exist in SNMPv1** (RFC2089/RFC3584): a v1 `GET` of
+one answers `noSuchName`, and a v1 walk silently steps over it as if it
+weren't registered. Enforced in exactly one place,
+`snmp_pdu_get.c`'s `lookup_and_fetch()`, so every read path shares it;
+`GetBulkRequest` doesn't need the same check since it's already v2c-only.
+
+**The single per-request context is `static`, not stack-allocated.**
+`snmp_pdu_ctx_t` (`snmp_pdu.h`) is large enough (varbinds × OID arcs ×
+octet buffers) that an early build carried it on the SNMP UDP task's
+stack and would have overflowed on the very first real request — see
+`snmp_message.c`'s `s_ctx` and `snmp_pdu.h`'s `_Static_assert` memory-
+budget gate, which fails the build rather than let that regress
+silently. This is safe specifically because `snmp_message_process()` is
+documented and used as non-reentrant, single-caller (`snmp_message.h`).
 
 **Security-model dispatch table = the SNMPv3 extension point.** PDU
 handlers and the MIB layer never see a raw community string — only an
@@ -111,8 +143,15 @@ overflowing a fixed buffer. See `snmp_pdu_getbulk.c`.
   else builds on.
 - `components/snmp_core/snmp_security.c` + `snmp_security_community.c` —
   the v3-readiness extension point and its only current implementation.
-- `components/mib/mib_registry.c` — the OID lookup/walk data structure.
-- `components/mib/mib_wespe.c` — where protocol meets hardware, via
-  `device_hal/`.
-- `mibs/WESPE-MIB.txt` — authoritative OID documentation; must stay in
-  sync with `mib_ii.c`/`mib_wespe.c` by hand (no code generation).
+- `components/mib/mib_registry.c` — the OID lookup/walk data structure,
+  scalars and conceptual tables alike.
+  `components/mib/include/mib_table.h` documents the table-registration
+  contract table authors must follow.
+- `components/mib/mib_wespe.c` / `mib_iftable.c` / `mib_sensor_table.c` —
+  where protocol meets hardware, via `device_hal/`; the first is scalars,
+  the latter two are this project's two conceptual tables (standard
+  IF-MIB and custom WESPE-MIB respectively).
+- `mibs/WESPE-MIB.txt` — authoritative OID documentation for the custom
+  MIB; must stay in sync with `mib_wespe.c`/`mib_sensor_table.c` by hand
+  (no code generation). `mib_iftable.c` implements the *standard*
+  IF-MIB's OIDs instead, which isn't authored anywhere in `mibs/`.

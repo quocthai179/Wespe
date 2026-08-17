@@ -208,18 +208,29 @@ static mib_result_t if_next_index(uint32_t current_index, uint32_t *out_index)
     return MIB_END_OF_VIEW;
 }
 
+/* wlan0's counters climb with uptime; see s_if_rows' comment. Called from
+ * both iftable_get_cell() and ifxtable_get_cell() -- ifHCInOctets/
+ * ifHCOutOctets read the same row->in_octets/out_octets fields ifTable's
+ * plain counters do (just widened), so both tables need this refreshed
+ * before reading them, not just whichever one happens to be walked
+ * first. */
+static void refresh_climbing_counters(mock_if_row_t *row)
+{
+    if (row->index != 1) {
+        return;
+    }
+    uint32_t t = (uint32_t)(time(NULL) - s_boot_time);
+    row->in_octets = t * 1500u + 2000u;
+    row->out_octets = t * 900u + 500u;
+}
+
 static mib_result_t iftable_get_cell(uint32_t column, uint32_t index, snmp_varbind_t *vb)
 {
     mock_if_row_t *row = find_if_row(index);
     if (row == NULL) {
         return MIB_NO_SUCH_INSTANCE;
     }
-    /* wlan0's counters climb with uptime; see s_if_rows' comment. */
-    if (row->index == 1) {
-        uint32_t t = (uint32_t)(time(NULL) - s_boot_time);
-        row->in_octets = t * 1500u + 2000u;
-        row->out_octets = t * 900u + 500u;
-    }
+    refresh_climbing_counters(row);
     switch (column) {
         case IF_COL_INDEX:
             vb->value_tag = BER_TAG_INTEGER;
@@ -300,6 +311,7 @@ static mib_result_t ifxtable_get_cell(uint32_t column, uint32_t index, snmp_varb
     if (row == NULL) {
         return MIB_NO_SUCH_INSTANCE;
     }
+    refresh_climbing_counters(row);
     switch (column) {
         case IFX_COL_NAME:
             vb->value_tag = BER_TAG_OCTET_STRING;
@@ -337,13 +349,16 @@ static const mib_table_t s_ifxtable = {
 };
 
 /* ---------------------------------------------------------------------
- * wespeSensorTable mock (docs/PLAN-TABLES.md Phase 13b). Two rows so a
- * real multi-row walk/GETBULK/SET-through-a-cell has something to
+ * wespeSensorTable mock (docs/PLAN-TABLES.md Phase 13b). Up to 2 rows so
+ * a real multi-row walk/GETBULK/SET-through-a-cell has something to
  * exercise; wespeSensorLabel is genuinely mutable via SET here, same as
- * production. Doesn't reproduce mib_sensor_table.c's row-count-varies-
- * over-time behavior (that needs CONFIG_WESPE_SENSOR_VOLATILE_ROWS'
- * timer, which only exists in the real Kconfig-built firmware) -- this
- * is a fixed 2-row table, real enough for wire-level verification.
+ * production. The row *count* cycles 1 <-> 2 on a fixed short clock
+ * (wsensor_row_count() below) unconditionally -- unlike production's
+ * opt-in CONFIG_WESPE_SENSOR_VOLATILE_ROWS (off by default, since real
+ * hardware shouldn't lie about its sensor count by default), dev_agent's
+ * whole purpose is giving tools something real to poke at, and "a row
+ * disappearing mid-walk" is exactly the scenario tools/demo.sh exists to
+ * show off without any ESP32 hardware.
  * ------------------------------------------------------------------- */
 
 #define WSENSOR_COL_INDEX      1u
@@ -352,7 +367,16 @@ static const mib_table_t s_ifxtable = {
 #define WSENSOR_COL_READ_COUNT 4u
 #define WSENSOR_COL_STATUS     5u
 #define WSENSOR_LABEL_MAX      32
-#define WSENSOR_ROW_COUNT      2
+#define WSENSOR_ROW_COUNT      2 /* max rows this mock ever has -- see wsensor_row_count() for the live count */
+
+static int wsensor_row_count(void)
+{
+    /* 1 row for the first 4s of every 8s window, 2 for the second half --
+     * short enough that a demo script doesn't need to wait long to
+     * observe both states. */
+    long t = (long)(time(NULL) - s_boot_time);
+    return ((t / 4) % 2 == 0) ? 1 : 2;
+}
 
 typedef struct {
     uint32_t index;
@@ -368,6 +392,9 @@ static mock_sensor_row_t s_sensor_rows[WSENSOR_ROW_COUNT] = {
 
 static mock_sensor_row_t *find_sensor_row(uint32_t index)
 {
+    if (index < 1 || index > (uint32_t)wsensor_row_count()) {
+        return NULL; /* row not present right now -- see wsensor_row_count() */
+    }
     for (int i = 0; i < WSENSOR_ROW_COUNT; i++) {
         if (s_sensor_rows[i].index == index) {
             return &s_sensor_rows[i];
@@ -377,12 +404,12 @@ static mock_sensor_row_t *find_sensor_row(uint32_t index)
 }
 static mib_result_t wsensor_first_index(uint32_t *out_index)
 {
-    *out_index = s_sensor_rows[0].index;
+    *out_index = 1; /* wsensor_row_count() is always >= 1 */
     return MIB_OK;
 }
 static mib_result_t wsensor_next_index(uint32_t current_index, uint32_t *out_index)
 {
-    if (current_index < WSENSOR_ROW_COUNT) {
+    if (current_index < (uint32_t)wsensor_row_count()) {
         *out_index = current_index + 1;
         return MIB_OK;
     }
