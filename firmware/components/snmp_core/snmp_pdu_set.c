@@ -18,33 +18,39 @@ ber_status_t snmp_pdu_handle_set(snmp_pdu_ctx_t *ctx)
         return BER_ERR_BAD_ARGS;
     }
 
-    const mib_object_t *objs[SNMP_MAX_VARBINDS];
-
-    /* Pass 1: validate every varbind (object exists, is writable, and the
-     * incoming value's tag matches what the object expects) without
+    /* Pass 1: validate every varbind (object/cell exists, is writable,
+     * and the incoming value's tag matches what it expects) without
      * calling a single setter. This is what makes the eventual commit
      * pass all-or-nothing at the protocol level -- see the pass 2 comment
-     * below for the one case (a setter itself failing) this can't cover. */
+     * below for the one case (a setter itself failing) this can't cover.
+     *
+     * Unlike GET's lookup_and_fetch(), no resolved-object cache is kept
+     * between pass 1 and pass 2 (via mib_resolved_t, or a table cell's
+     * table/column/index) -- mib_registry_resolve() is cheap (small
+     * linear scans, no table/registry mutation happens mid-request in
+     * this single-threaded agent), so pass 2 just re-resolves each
+     * varbind instead of spending SNMP_MAX_VARBINDS * sizeof(mib_resolved_t)
+     * of stack keeping the pass-1 results around. */
     for (size_t i = 0; i < ctx->varbind_count; i++) {
-        const mib_object_t *obj = mib_registry_find(ctx->varbinds[i].oid, ctx->varbinds[i].oid_len);
-        mib_result_t res;
-        if (obj == NULL) {
-            res = MIB_NO_SUCH_OBJECT;
-        } else if (obj->access != MIB_ACCESS_RW) {
-            res = MIB_NOT_WRITABLE;
-        } else if (ctx->varbinds[i].value_tag != obj->value_tag) {
-            res = MIB_WRONG_TYPE;
-        } else {
-            res = MIB_OK;
+        mib_resolved_t resolved;
+        mib_result_t res = mib_registry_resolve(ctx->varbinds[i].oid, ctx->varbinds[i].oid_len, &resolved);
+        if (res == MIB_OK) {
+            if (resolved.access != MIB_ACCESS_RW) {
+                res = MIB_NOT_WRITABLE;
+            } else if (ctx->varbinds[i].value_tag != resolved.value_tag) {
+                res = MIB_WRONG_TYPE;
+            }
         }
-        objs[i] = obj;
 
         if (res != MIB_OK) {
             /* SET always uses v1-style PDU-level error semantics,
              * regardless of the negotiated version -- force that
              * translation rather than snmp_error_translate(ctx->version,
              * ...), which would otherwise hand back v2c exception tags
-             * that don't apply here. */
+             * that don't apply here. (MIB_NO_SUCH_INSTANCE, possible now
+             * that table cells can be resolved, maps to the same
+             * noSuchName as MIB_NO_SUCH_OBJECT in v1 -- see
+             * snmp_error.c -- so no special-casing needed here.) */
             snmp_error_translation_t tr = snmp_error_translate(SNMP_VERSION_V1, res);
             ctx->pdu_tag = SNMP_PDU_GET_RESPONSE;
             ctx->error_status = tr.v1_error_status;
@@ -55,15 +61,20 @@ ber_status_t snmp_pdu_handle_set(snmp_pdu_ctx_t *ctx)
         }
     }
 
-    /* Pass 2 (commit): every varbind passed validation, so apply them all.
-     * A setter can still fail here for a reason validation can't catch
-     * (e.g. a GPIO write error) -- that's reported as genErr, but note it
-     * is NOT rolled back if an *earlier* varbind's setter already took
-     * effect: undoing an arbitrary physical side effect (a relay that
-     * already clicked) isn't something this layer can promise in general.
-     * Documented limitation; see docs/architecture.md. */
+    /* Pass 2 (commit): every varbind passed validation, so apply them
+     * all. A setter can still fail here for a reason validation can't
+     * catch (e.g. a GPIO write error) -- that's reported as genErr, but
+     * note it is NOT rolled back if an *earlier* varbind's setter already
+     * took effect: undoing an arbitrary physical side effect (a relay
+     * that already clicked, a table row already renamed) isn't something
+     * this layer can promise in general. Documented limitation; see
+     * docs/architecture.md. */
     for (size_t i = 0; i < ctx->varbind_count; i++) {
-        mib_result_t res = objs[i]->setter(&ctx->varbinds[i]);
+        mib_resolved_t resolved;
+        mib_result_t res = mib_registry_resolve(ctx->varbinds[i].oid, ctx->varbinds[i].oid_len, &resolved);
+        if (res == MIB_OK) {
+            res = mib_resolved_set(&resolved, &ctx->varbinds[i]);
+        }
         if (res != MIB_OK) {
             ctx->pdu_tag = SNMP_PDU_GET_RESPONSE;
             ctx->error_status = SNMP_V1_ERR_GEN_ERR;

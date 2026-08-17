@@ -27,13 +27,14 @@
 
 static mib_result_t getnext_into(const snmp_varbind_t *current, snmp_varbind_t *out_vb)
 {
-    const mib_object_t *obj = mib_registry_find_next(current->oid, current->oid_len);
-    if (obj == NULL) {
-        return MIB_END_OF_VIEW;
+    mib_resolved_t resolved;
+    mib_result_t r = mib_registry_resolve_next(current->oid, current->oid_len, &resolved);
+    if (r != MIB_OK) {
+        return r; /* MIB_END_OF_VIEW */
     }
-    out_vb->oid_len = obj->oid_len;
-    memcpy(out_vb->oid, obj->oid, (size_t)obj->oid_len * sizeof(uint32_t));
-    return obj->getter(out_vb);
+    out_vb->oid_len = resolved.oid_len;
+    memcpy(out_vb->oid, resolved.oid, (size_t)resolved.oid_len * sizeof(uint32_t));
+    return mib_resolved_get(&resolved, out_vb);
 }
 
 /* Appends one varbind directly into ctx->varbinds[*resp_count], translating

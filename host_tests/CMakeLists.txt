@@ -59,6 +59,7 @@ endfunction()
 wespe_add_test(test_ber_encode ber_host)
 wespe_add_test(test_ber_decode ber_host)
 wespe_add_test(test_mib_registry mib_host)
+wespe_add_test(test_mib_table mib_host)
 wespe_add_test(test_snmp_message snmp_core_host)
 wespe_add_test(test_fuzz_corpus snmp_core_host)
 

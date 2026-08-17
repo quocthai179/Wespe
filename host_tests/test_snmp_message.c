@@ -52,6 +52,61 @@ static const mib_object_t s_mock_objects[] = {
     {OID_C, 9, BER_TAG_INTEGER, MIB_ACCESS_RO, get_c, NULL},
 };
 
+/* A tiny mock table (2 rows, 1 writable column), registered right after
+ * OID_C in OID space, so GETNEXT off the end of the scalars naturally
+ * walks into it -- full-pipeline (BER + PDU handling + resolve)
+ * integration coverage on top of test_mib_table.c's registry-level
+ * coverage of the same table-walk logic. */
+static int32_t s_table_row1_value = 10;
+static int32_t s_table_row2_value = 20;
+
+static mib_result_t table_first_index(uint32_t *out)
+{
+    *out = 1;
+    return MIB_OK;
+}
+static mib_result_t table_next_index(uint32_t cur, uint32_t *out)
+{
+    if (cur < 2) {
+        *out = 2;
+        return MIB_OK;
+    }
+    return MIB_END_OF_VIEW;
+}
+static mib_result_t table_get_cell(uint32_t column, uint32_t index, snmp_varbind_t *vb)
+{
+    (void)column;
+    vb->value_tag = BER_TAG_INTEGER;
+    vb->int_value = (index == 1) ? s_table_row1_value : s_table_row2_value;
+    return MIB_OK;
+}
+static mib_result_t table_set_cell(uint32_t column, uint32_t index, const snmp_varbind_t *vb)
+{
+    (void)column;
+    if (vb->value_tag != BER_TAG_INTEGER) {
+        return MIB_WRONG_TYPE;
+    }
+    if (index == 1) {
+        s_table_row1_value = vb->int_value;
+    } else {
+        s_table_row2_value = vb->int_value;
+    }
+    return MIB_OK;
+}
+
+static const uint32_t TABLE_ENTRY[] = {1, 3, 6, 1, 4, 1, 11111, 4, 1};
+static const mib_column_t s_table_columns[] = {{1, BER_TAG_INTEGER, MIB_ACCESS_RW}};
+static const mib_table_t s_mock_table = {
+    .entry_oid = TABLE_ENTRY,
+    .entry_oid_len = 9,
+    .columns = s_table_columns,
+    .column_count = 1,
+    .first_index = table_first_index,
+    .next_index = table_next_index,
+    .get_cell = table_get_cell,
+    .set_cell = table_set_cell,
+};
+
 static void setup(void)
 {
     mib_registry_reset();
@@ -60,6 +115,18 @@ static void setup(void)
     snmp_security_community_init("public", "private");
     snmp_security_usm_stub_init();
     s_mock_b_value = 0;
+}
+
+/* Same as setup(), plus the mock table -- kept separate (rather than
+ * folded into setup() itself) specifically so it doesn't shift the
+ * "end of MIB view" boundary that the plain-scalar tests above already
+ * pin exact varbind counts against. */
+static void setup_with_table(void)
+{
+    setup();
+    mib_registry_register_table(&s_mock_table);
+    s_table_row1_value = 10;
+    s_table_row2_value = 20;
 }
 
 static snmp_varbind_t make_null_varbind(const uint32_t *oid, size_t oid_len)
@@ -409,6 +476,89 @@ UM_TEST(test_getbulk_clamps_excess_repeating_columns)
     }
 }
 
+UM_TEST(test_get_table_cell_end_to_end)
+{
+    setup_with_table();
+    uint32_t cell_oid[11];
+    memcpy(cell_oid, TABLE_ENTRY, 9 * sizeof(uint32_t));
+    cell_oid[9] = 1;
+    cell_oid[10] = 1;
+    snmp_varbind_t req_vb = make_null_varbind(cell_oid, 11);
+    uint8_t packet[512];
+    size_t packet_len = build_request(SNMP_VERSION_V2C, SNMP_PDU_GET_REQUEST, "public", 20, 0, 0, &req_vb, 1, packet, sizeof(packet));
+    uint8_t response[512];
+    size_t response_len = snmp_message_process(packet, packet_len, response, sizeof(response));
+    UM_CHECK(response_len > 0);
+
+    snmp_pdu_ctx_t resp;
+    UM_CHECK(decode_message_any_tag(response, response_len, &resp));
+    UM_CHECK_EQ_INT(resp.error_status, 0);
+    UM_CHECK_EQ_INT(resp.varbinds[0].int_value, 10);
+}
+
+UM_TEST(test_getnext_walks_from_scalar_into_table_end_to_end)
+{
+    setup_with_table();
+    snmp_varbind_t req_vb = make_null_varbind(OID_C, 9); /* last scalar */
+    uint8_t packet[512];
+    size_t packet_len = build_request(SNMP_VERSION_V2C, SNMP_PDU_GET_NEXT_REQUEST, "public", 21, 0, 0, &req_vb, 1, packet, sizeof(packet));
+    uint8_t response[512];
+    size_t response_len = snmp_message_process(packet, packet_len, response, sizeof(response));
+    UM_CHECK(response_len > 0);
+
+    snmp_pdu_ctx_t resp;
+    UM_CHECK(decode_message_any_tag(response, response_len, &resp));
+    UM_CHECK_EQ_INT(resp.varbinds[0].oid_len, 11);
+    for (int i = 0; i < 9; i++) {
+        UM_CHECK_EQ_INT(resp.varbinds[0].oid[i], TABLE_ENTRY[i]);
+    }
+    UM_CHECK_EQ_INT(resp.varbinds[0].oid[9], 1); /* column 1 */
+    UM_CHECK_EQ_INT(resp.varbinds[0].oid[10], 1); /* row 1 */
+    UM_CHECK_EQ_INT(resp.varbinds[0].int_value, 10);
+}
+
+UM_TEST(test_getbulk_walks_full_table_end_to_end)
+{
+    setup_with_table();
+    uint32_t before_table[9];
+    memcpy(before_table, TABLE_ENTRY, 9 * sizeof(uint32_t));
+    /* Start right at the table's own entry OID (no column/index yet). */
+    snmp_varbind_t req_vb = make_null_varbind(before_table, 9);
+    uint8_t packet[512];
+    size_t packet_len = build_request(SNMP_VERSION_V2C, SNMP_PDU_GET_BULK_REQUEST, "public", 22, 0, 5, &req_vb, 1, packet, sizeof(packet));
+    uint8_t response[512];
+    size_t response_len = snmp_message_process(packet, packet_len, response, sizeof(response));
+    UM_CHECK(response_len > 0);
+
+    snmp_pdu_ctx_t resp;
+    UM_CHECK(decode_message_any_tag(response, response_len, &resp));
+    /* row1(10), row2(20), then endOfMibView -- early-stop, not padded to 5. */
+    UM_CHECK_EQ_INT(resp.varbind_count, 3);
+    UM_CHECK_EQ_INT(resp.varbinds[0].int_value, 10);
+    UM_CHECK_EQ_INT(resp.varbinds[1].int_value, 20);
+    UM_CHECK_EQ_INT(resp.varbinds[2].value_tag, SNMP_TAG_END_OF_MIB_VIEW);
+}
+
+UM_TEST(test_set_table_cell_end_to_end)
+{
+    setup_with_table();
+    uint32_t cell_oid[11];
+    memcpy(cell_oid, TABLE_ENTRY, 9 * sizeof(uint32_t));
+    cell_oid[9] = 1;
+    cell_oid[10] = 2;
+    snmp_varbind_t req_vb = make_int_varbind(cell_oid, 11, 99);
+    uint8_t packet[512];
+    size_t packet_len = build_request(SNMP_VERSION_V2C, SNMP_PDU_SET_REQUEST, "private", 23, 0, 0, &req_vb, 1, packet, sizeof(packet));
+    uint8_t response[512];
+    size_t response_len = snmp_message_process(packet, packet_len, response, sizeof(response));
+    UM_CHECK(response_len > 0);
+    UM_CHECK_EQ_INT(s_table_row2_value, 99);
+
+    snmp_pdu_ctx_t resp;
+    UM_CHECK(decode_message_any_tag(response, response_len, &resp));
+    UM_CHECK_EQ_INT(resp.error_status, 0);
+}
+
 UM_TEST(test_v2c_trap_build_and_decode)
 {
     uint32_t trap_oid[] = {1, 3, 6, 1, 4, 1, 99999, 3, 0, 1};
@@ -462,6 +612,10 @@ int main(void)
     UM_RUN(test_getbulk_walks_and_hits_end_of_view);
     UM_RUN(test_getbulk_non_repeaters);
     UM_RUN(test_getbulk_clamps_excess_repeating_columns);
+    UM_RUN(test_get_table_cell_end_to_end);
+    UM_RUN(test_getnext_walks_from_scalar_into_table_end_to_end);
+    UM_RUN(test_getbulk_walks_full_table_end_to_end);
+    UM_RUN(test_set_table_cell_end_to_end);
     UM_RUN(test_v2c_trap_build_and_decode);
     UM_RUN(test_v1_trap_build_starts_with_correct_envelope);
     return um_summary();

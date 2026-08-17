@@ -14,20 +14,24 @@ typedef enum {
     LOOKUP_NEXT,
 } lookup_mode_t;
 
-/* Looks up `request_vb`'s OID (exact match for GET, lower-bound successor
- * for GETNEXT) and, on success, fills `out_vb` starting from the *found
- * object's* OID (identical to the request's OID for GET; the walked-to
- * OID for GETNEXT) and then its value. Does not touch `request_vb`. */
+/* Resolves `request_vb`'s OID (exact match for GET, lower-bound successor
+ * for GETNEXT) -- against scalars *and* table cells alike, via
+ * mib_registry_resolve*() (docs/PLAN-TABLES.md Phase 11) -- and, on
+ * success, fills `out_vb` starting from the *resolved instance's* OID
+ * (identical to the request's OID for GET; the walked-to OID for
+ * GETNEXT, which for a table cell includes the row index) and then its
+ * value. Does not touch `request_vb`. */
 static mib_result_t lookup_and_fetch(lookup_mode_t mode, const snmp_varbind_t *request_vb, snmp_varbind_t *out_vb)
 {
-    const mib_object_t *obj = (mode == LOOKUP_EXACT) ? mib_registry_find(request_vb->oid, request_vb->oid_len)
-                                                       : mib_registry_find_next(request_vb->oid, request_vb->oid_len);
-    if (obj == NULL) {
-        return (mode == LOOKUP_EXACT) ? MIB_NO_SUCH_OBJECT : MIB_END_OF_VIEW;
+    mib_resolved_t resolved;
+    mib_result_t r = (mode == LOOKUP_EXACT) ? mib_registry_resolve(request_vb->oid, request_vb->oid_len, &resolved)
+                                             : mib_registry_resolve_next(request_vb->oid, request_vb->oid_len, &resolved);
+    if (r != MIB_OK) {
+        return r; /* NO_SUCH_OBJECT / NO_SUCH_INSTANCE / END_OF_VIEW, as appropriate */
     }
-    out_vb->oid_len = obj->oid_len;
-    memcpy(out_vb->oid, obj->oid, (size_t)obj->oid_len * sizeof(uint32_t));
-    return obj->getter(out_vb);
+    out_vb->oid_len = resolved.oid_len;
+    memcpy(out_vb->oid, resolved.oid, (size_t)resolved.oid_len * sizeof(uint32_t));
+    return mib_resolved_get(&resolved, out_vb);
 }
 
 static ber_status_t process_read_pdu(snmp_pdu_ctx_t *ctx, lookup_mode_t mode)
