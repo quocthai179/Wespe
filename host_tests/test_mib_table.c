@@ -381,6 +381,61 @@ UM_TEST(test_resolved_set_writes_through_to_the_table)
     UM_CHECK_EQ_MEM(s_rows[0].col2_value, "rack-top", 8);
 }
 
+/* ---- Multiple tables registered simultaneously (Phase 13a's real
+ * ifTable + ifXTable coexisting is the motivating case -- every test
+ * above only ever registers one table at a time, which doesn't exercise
+ * mib_registry_resolve_next()'s "best candidate across every table"
+ * comparison the way a >1-table registry actually does in production). --- */
+
+UM_TEST(test_resolve_next_walks_across_two_tables_via_intervening_scalar)
+{
+    /* OID order here: OID_SCALAR_BEFORE(.1.1) < s_table(.2.1.*) <
+     * OID_SCALAR_AFTER(.3.1) < s_ro_table(.4.1.*) -- registering both
+     * tables plus both scalars at once means resolve_next has two live
+     * table candidates to choose the global-smallest from at every step,
+     * not just one. */
+    setup(); /* registers s_scalars + s_table */
+    mib_registry_register_table(&s_ro_table);
+
+    uint32_t oid[16];
+    uint32_t len = cell_oid(2, 5, oid); /* last cell of s_table's last column */
+    mib_resolved_t r;
+
+    UM_CHECK_EQ_INT(mib_registry_resolve_next(oid, len, &r), MIB_OK);
+    UM_CHECK_EQ_INT(r.kind, MIB_RESOLVED_SCALAR);
+    UM_CHECK(r.scalar->oid == OID_SCALAR_AFTER); /* falls out of s_table, not into s_ro_table yet */
+
+    UM_CHECK_EQ_INT(mib_registry_resolve_next(OID_SCALAR_AFTER, 10, &r), MIB_OK);
+    UM_CHECK_EQ_INT(r.kind, MIB_RESOLVED_CELL);
+    UM_CHECK(r.cell.table == &s_ro_table); /* now the *other* table, correctly picked over s_table */
+    UM_CHECK_EQ_INT(r.cell.column, 1);
+    UM_CHECK_EQ_INT(r.cell.index, 1);
+
+    UM_CHECK_EQ_INT(mib_registry_resolve_next(r.oid, r.oid_len, &r), MIB_END_OF_VIEW); /* nothing after the second table's one cell */
+}
+
+UM_TEST(test_resolve_exact_disambiguates_between_two_tables_by_prefix)
+{
+    /* Exact-match resolve must pick the table whose entry_oid prefix
+     * actually matches -- not just "the first one registered" -- even
+     * though both are live in the registry at once. */
+    setup();
+    mib_registry_register_table(&s_ro_table);
+
+    uint32_t oid[16];
+    memcpy(oid, RO_TABLE_ENTRY_OID, 9 * sizeof(uint32_t));
+    oid[9] = 1;
+    oid[10] = 1;
+    mib_resolved_t r;
+    UM_CHECK_EQ_INT(mib_registry_resolve(oid, 11, &r), MIB_OK);
+    UM_CHECK(r.cell.table == &s_ro_table);
+
+    snmp_varbind_t vb;
+    memset(&vb, 0, sizeof(vb));
+    UM_CHECK_EQ_INT(mib_resolved_get(&r, &vb), MIB_OK);
+    UM_CHECK_EQ_INT(vb.int_value, 42); /* s_ro_table's fixed value, not s_table's */
+}
+
 UM_TEST(test_resolved_set_on_table_with_no_set_cell_is_not_writable)
 {
     mib_registry_reset();
@@ -416,6 +471,8 @@ int main(void)
     UM_RUN(test_resolve_next_skips_deactivated_row);
     UM_RUN(test_resolve_exact_deactivated_row_is_no_such_instance);
     UM_RUN(test_resolved_set_writes_through_to_the_table);
+    UM_RUN(test_resolve_next_walks_across_two_tables_via_intervening_scalar);
+    UM_RUN(test_resolve_exact_disambiguates_between_two_tables_by_prefix);
     UM_RUN(test_resolved_set_on_table_with_no_set_cell_is_not_writable);
     return um_summary();
 }
