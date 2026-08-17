@@ -25,21 +25,34 @@ typedef enum {
     MIB_GEN_ERR          = 7,
 } mib_result_t;
 
-/* A single varbind's value. Deliberately not a real C union (no tag-vs-
- * storage aliasing surprises, easy to assert against in tests) -- the
- * extra bytes are cheap at this object count. `value_tag` selects which of
- * int_value/octets/oid_value is meaningful. */
+/* A single varbind's value. `value_tag` selects which member of the
+ * union below is meaningful -- exactly one of them ever holds live data
+ * for a given varbind, so a real union is a straightforward win here
+ * (this used to be four separate fields; that cost ~180 bytes per
+ * varbind out of a struct that's repeated SNMP_MAX_VARBINDS times inside
+ * snmp_pdu_ctx_t -- see snmp_pdu.h's size budget assertion). The nested
+ * struct members are anonymous specifically so call sites are unaffected
+ * by this layout change: `vb->octets`, `vb->octets_len`, `vb->oid_value`,
+ * etc. still work exactly as before (C11 6.7.2.1p13 hoists anonymous
+ * struct/union members into the enclosing struct's namespace). */
 typedef struct {
     uint32_t oid[BER_MAX_OID_LEN];
     size_t   oid_len;
 
     uint8_t  value_tag; /* BER_TAG_*, SNMP_TAG_*, or an exception tag */
 
-    int32_t  int_value;                  /* INTEGER, Counter32/Gauge32/TimeTicks (unsigned reinterpreted) */
-    uint8_t  octets[SNMP_MAX_OCTETS_LEN]; /* OCTET STRING content */
-    size_t   octets_len;
-    uint32_t oid_value[BER_MAX_OID_LEN];  /* OBJECT IDENTIFIER content, e.g. sysObjectID */
-    size_t   oid_value_len;
+    union {
+        int32_t  int_value;      /* INTEGER, Counter32/Gauge32/TimeTicks (unsigned reinterpreted) */
+        uint64_t counter64_value; /* Counter64 -- see docs/PLAN-TABLES.md Phase 12 */
+        struct {
+            uint8_t octets[SNMP_MAX_OCTETS_LEN]; /* OCTET STRING content */
+            size_t  octets_len;
+        };
+        struct {
+            uint32_t oid_value[BER_MAX_OID_LEN]; /* OBJECT IDENTIFIER content, e.g. sysObjectID */
+            size_t   oid_value_len;
+        };
+    };
 } snmp_varbind_t;
 
 #ifdef __cplusplus

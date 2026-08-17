@@ -65,9 +65,13 @@ typedef enum {
 #define BER_MAX_NEST_DEPTH 6
 
 /* Max number of sub-identifiers (arcs) supported in a decoded/encoded OID.
- * Real MIB OIDs in this project are at most ~10 arcs deep; 32 leaves ample
- * headroom without inviting a large fixed allocation. */
-#define BER_MAX_OID_LEN 32
+ * Real MIB OIDs in this project are at most ~12 arcs deep (a table cell
+ * like ifTable's ifDescr.1 is 1.3.6.1.2.1.2.2.1.2.1 = 11 arcs); 20 leaves
+ * comfortable headroom without inviting an oversized fixed allocation --
+ * this array is repeated twice per snmp_varbind_t (mib_types.h), which is
+ * itself repeated SNMP_MAX_VARBINDS times in snmp_pdu_ctx_t, so shrinking
+ * it directly shrinks that budget. */
+#define BER_MAX_OID_LEN 20
 
 #ifdef __cplusplus
 }

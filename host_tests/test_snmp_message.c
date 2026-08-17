@@ -374,6 +374,41 @@ UM_TEST(test_getbulk_non_repeaters)
     UM_CHECK_EQ_INT(resp.varbinds[1].int_value, 0);
 }
 
+UM_TEST(test_getbulk_clamps_excess_repeating_columns)
+{
+    setup();
+    /* 20 distinct repeating varbinds (all starting at the same "before
+     * all objects" OID here, for simplicity -- the point is the *count*,
+     * not that they're meaningfully different columns) against
+     * snmp_pdu_getbulk.c's SNMP_MAX_REPEATING_COLUMNS=16 clamp. Must not
+     * crash/overrun, and the response should reflect exactly 16 clamped
+     * repeaters x 2 rounds, not 20 x 2. */
+    uint32_t before_all[] = {1, 3, 6, 1, 4, 1, 11111, 0};
+    snmp_varbind_t reqs[20];
+    for (int i = 0; i < 20; i++) {
+        reqs[i] = make_null_varbind(before_all, 8);
+    }
+    uint8_t packet[2048];
+    size_t packet_len = build_request(SNMP_VERSION_V2C, SNMP_PDU_GET_BULK_REQUEST, "public", 11, 0, 2, reqs, 20, packet, sizeof(packet));
+    UM_CHECK(packet_len > 0);
+
+    uint8_t response[2048];
+    size_t response_len = snmp_message_process(packet, packet_len, response, sizeof(response));
+    UM_CHECK(response_len > 0);
+
+    snmp_pdu_ctx_t resp;
+    UM_CHECK(decode_message_any_tag(response, response_len, &resp));
+    /* 16 repeaters (clamped from 20) x 2 rounds: round 1 all resolve to
+     * A (int_value=100), round 2 all resolve to B (int_value=0). */
+    UM_CHECK_EQ_INT(resp.varbind_count, 32);
+    for (int i = 0; i < 16; i++) {
+        UM_CHECK_EQ_INT(resp.varbinds[i].int_value, 100);
+    }
+    for (int i = 16; i < 32; i++) {
+        UM_CHECK_EQ_INT(resp.varbinds[i].int_value, 0);
+    }
+}
+
 UM_TEST(test_v2c_trap_build_and_decode)
 {
     uint32_t trap_oid[] = {1, 3, 6, 1, 4, 1, 99999, 3, 0, 1};
@@ -426,6 +461,7 @@ int main(void)
     UM_RUN(test_unsupported_version_dropped);
     UM_RUN(test_getbulk_walks_and_hits_end_of_view);
     UM_RUN(test_getbulk_non_repeaters);
+    UM_RUN(test_getbulk_clamps_excess_repeating_columns);
     UM_RUN(test_v2c_trap_build_and_decode);
     UM_RUN(test_v1_trap_build_starts_with_correct_envelope);
     return um_summary();

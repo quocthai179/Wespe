@@ -8,7 +8,14 @@
 extern "C" {
 #endif
 
-#define SNMP_MAX_VARBINDS      24
+/* Max varbinds in one request/response PDU. Sized for a useful GETBULK
+ * slice across a table (a walk of a handful of columns over a modest
+ * number of rows) -- raised from an earlier 24 once Phase 10 made
+ * snmp_pdu_ctx_t below a `static` (BSS), not a stack-allocated, cost; see
+ * the _Static_assert at the bottom of this file for the actual budget
+ * enforcement. Bumping this is safe from a stack standpoint but grows
+ * static RAM linearly -- re-check that assert if you do. */
+#define SNMP_MAX_VARBINDS      50
 #define SNMP_MAX_PRINCIPAL_LEN 32
 
 typedef enum {
@@ -44,6 +51,26 @@ typedef struct {
     snmp_access_mode_t    access_mode;
     char                  principal[SNMP_MAX_PRINCIPAL_LEN]; /* community name for v1/v2c */
 } snmp_pdu_ctx_t;
+
+/* Memory-budget regression gate (Phase 10, docs/PLAN-TABLES.md): the
+ * agent's single request/response context was found allocated on an
+ * 8 KB FreeRTOS task stack while itself measuring >10 KB -- the first
+ * real request would have overflowed it. snmp_message.c now holds this
+ * in a `static` (BSS) instance instead of on the stack, which is what
+ * makes a budget this size safe to carry at all, but BSS on an ESP32-S3
+ * is still a finite, shared resource -- this assert exists so that
+ * raising SNMP_MAX_VARBINDS, BER_MAX_OID_LEN, or SNMP_MAX_OCTETS_LEN
+ * without thinking about the product of all three fails the build
+ * instead of silently eating RAM. Adjust the budget deliberately if a
+ * real feature needs more; don't just raise it to make this pass. */
+#define WESPE_PDU_CTX_BUDGET_BYTES 16384
+#ifdef __cplusplus
+static_assert(sizeof(snmp_pdu_ctx_t) <= WESPE_PDU_CTX_BUDGET_BYTES,
+              "snmp_pdu_ctx_t exceeds its static memory budget -- see WESPE_PDU_CTX_BUDGET_BYTES");
+#else
+_Static_assert(sizeof(snmp_pdu_ctx_t) <= WESPE_PDU_CTX_BUDGET_BYTES,
+               "snmp_pdu_ctx_t exceeds its static memory budget -- see WESPE_PDU_CTX_BUDGET_BYTES");
+#endif
 
 #ifdef __cplusplus
 }
