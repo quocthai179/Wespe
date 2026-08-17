@@ -21,6 +21,18 @@ menu "Wespe SNMP Agent Configuration"
             can be exercised on a plain dev board before any sensor or
             relay is wired up.
 
+    config WESPE_SENSOR_VOLATILE_ROWS
+        bool "Simulate sensors appearing/disappearing over time (mock only)"
+        default n
+        depends on WESPE_HAL_MOCK
+        help
+            When enabled, sensor_mock.c's simulated sensor count cycles
+            between 1 and 3 on a fixed timer instead of staying fixed at
+            3, so wespeSensorTable's row set genuinely changes between
+            (or during) SNMP polls. Useful for confirming a polling
+            engine tolerates conceptual-table rows appearing/
+            disappearing mid-walk -- see docs/PLAN-TABLES.md Phase 13b.
+
     config WESPE_DS18B20_GPIO
         int "DS18B20 1-Wire data GPIO"
         default 4

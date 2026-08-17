@@ -2,13 +2,13 @@ WESPE-MIB DEFINITIONS ::= BEGIN
 
 IMPORTS
     MODULE-IDENTITY, OBJECT-TYPE, NOTIFICATION-TYPE,
-    Integer32, Gauge32, enterprises
+    Integer32, Gauge32, Counter64, enterprises
         FROM SNMPv2-SMI
     MODULE-COMPLIANCE, OBJECT-GROUP, NOTIFICATION-GROUP
         FROM SNMPv2-CONF;
 
 wespeMIB MODULE-IDENTITY
-    LAST-UPDATED "202608120000Z"
+    LAST-UPDATED "202608170000Z"
     ORGANIZATION "Wespe project"
     CONTACT-INFO
         "Thai Huynh
@@ -28,6 +28,12 @@ wespeMIB MODULE-IDENTITY
          which must stay in exact sync with it) before relying on this
          MIB outside a lab/demo setting where OID collisions with
          someone else's placeholder enterprise number don't matter."
+    REVISION "202608170000Z"
+    DESCRIPTION
+        "Added wespeSensorTable (docs/PLAN-TABLES.md Phase 13b): a
+         conceptual table demonstrating multi-row sensor data and a
+         writable column (wespeSensorLabel), backed by a genuinely
+         variable-length row set."
     REVISION "202608120000Z"
     DESCRIPTION
         "Initial version."
@@ -107,6 +113,102 @@ wespeWifiRssi OBJECT-TYPE
          associated with an access point."
     ::= { wespeObjects 5 }
 
+wespeSensorTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF WespeSensorEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "One row per temperature sensor currently present. Today's
+         reference hardware (a single-device DS18B20 1-Wire bus, see
+         docs/hardware-wiring.md) always has exactly one row; the table
+         shape exists because 1-Wire genuinely supports multiple devices
+         on one bus, which is the real direction this device would grow
+         in with a second sensor wired up. The mock/simulation backend
+         reports up to 4 rows today, and can optionally vary that count
+         over time (CONFIG_WESPE_SENSOR_VOLATILE_ROWS) specifically so a
+         polling engine can be tested against rows appearing and
+         disappearing between -- or during -- a walk, not just a fixed
+         row set."
+    ::= { wespeObjects 6 }
+
+wespeSensorEntry OBJECT-TYPE
+    SYNTAX      WespeSensorEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+        "One sensor's row."
+    INDEX   { wespeSensorIndex }
+    ::= { wespeSensorTable 1 }
+
+WespeSensorEntry ::= SEQUENCE {
+    wespeSensorIndex     Integer32,
+    wespeSensorLabel     OCTET STRING,
+    wespeSensorTempDeciC Integer32,
+    wespeSensorReadCount Counter64,
+    wespeSensorStatus    INTEGER
+}
+
+wespeSensorIndex OBJECT-TYPE
+    SYNTAX      Integer32 (1..4)
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "This row's sensor number, 1-based. Rows are dense: if N sensors
+         are present, indices 1..N all exist and nothing higher does --
+         unlike wespeSensorTable's own row set over *time*, there are no
+         sparse gaps within one snapshot."
+    ::= { wespeSensorEntry 1 }
+
+wespeSensorLabel OBJECT-TYPE
+    SYNTAX      OCTET STRING (SIZE(0..31))
+    MAX-ACCESS  read-write
+    STATUS      current
+    DESCRIPTION
+        "Operator-assigned name for this sensor (e.g. 'attic',
+         'coolant-inlet'). Defaults to 'sensor<N>' until explicitly set.
+         The one writable column in this table, exercising SetRequest
+         through a table cell rather than a scalar -- see
+         wespeRelayState for the scalar equivalent. Not persisted across
+         a reboot, and reset to its default if this row disappears and a
+         later row reuses the same index."
+    ::= { wespeSensorEntry 2 }
+
+wespeSensorTempDeciC OBJECT-TYPE
+    SYNTAX      Integer32
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "This sensor's current reading, in tenths of a degree Celsius --
+         same fixed-point convention as the scalar wespeTemperature.
+         A GetRequest returns genErr if this particular sensor's most
+         recent read attempt failed."
+    ::= { wespeSensorEntry 3 }
+
+wespeSensorReadCount OBJECT-TYPE
+    SYNTAX      Counter64
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "Count of successful temperature reads served for this sensor
+         since boot (i.e. since this row's index was last (re)assigned).
+         SNMPv1 managers cannot see this object at all -- a v1 GetRequest
+         answers noSuchName, and a v1 walk silently steps over it -- per
+         RFC 2089 / RFC 3584's Counter64-in-v1 rule."
+    ::= { wespeSensorEntry 4 }
+
+wespeSensorStatus OBJECT-TYPE
+    SYNTAX      INTEGER { ok(1), readError(2) }
+    MAX-ACCESS  read-only
+    STATUS      current
+    DESCRIPTION
+        "This sensor's most recent read outcome. readError(2) means the
+         underlying device_hal read call failed (e.g. a 1-Wire CRC
+         mismatch or timeout on real hardware); it does not by itself
+         mean the row will disappear -- a transient read failure and a
+         sensor genuinely leaving the table are different, independently
+         observable conditions."
+    ::= { wespeSensorEntry 5 }
+
 -- ============================================================
 -- wespeTraps: notifications are direct children of this node (the
 -- common convention in modern private-enterprise MIBs; see e.g. IF-MIB's
@@ -147,11 +249,16 @@ wespeObjectGroup OBJECT-GROUP
         wespeRelayState,
         wespeUptimeSeconds,
         wespeFreeHeapBytes,
-        wespeWifiRssi
+        wespeWifiRssi,
+        wespeSensorIndex,
+        wespeSensorLabel,
+        wespeSensorTempDeciC,
+        wespeSensorReadCount,
+        wespeSensorStatus
     }
     STATUS  current
     DESCRIPTION
-        "All scalar objects defined by WESPE-MIB."
+        "All scalar and table-column objects defined by WESPE-MIB."
     ::= { wespeConformance 1 }
 
 wespeNotificationGroup NOTIFICATION-GROUP

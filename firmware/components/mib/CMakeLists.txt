@@ -9,7 +9,7 @@
 # have nothing to do with this component's own code. Learned the hard way
 # via a failing idf-build.yml CI run; see git history.
 idf_component_register(
-    SRCS "mib_registry.c" "mib_ii.c" "mib_wespe.c" "mib_iftable.c"
+    SRCS "mib_registry.c" "mib_ii.c" "mib_wespe.c" "mib_iftable.c" "mib_sensor_table.c"
     INCLUDE_DIRS "include"
     REQUIRES ber device_hal
 )

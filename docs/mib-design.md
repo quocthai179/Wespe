@@ -24,7 +24,13 @@ iso.org.dod.internet.private.enterprises.99999   wespeMIB   (custom, mib_wespe.c
 │  ├─ wespeRelayState.0                    .2.2.0   INTEGER {off,on}     RW
 │  ├─ wespeUptimeSeconds.0                 .2.3.0   Gauge32              RO
 │  ├─ wespeFreeHeapBytes.0                 .2.4.0   Gauge32              RO
-│  └─ wespeWifiRssi.0                      .2.5.0   INTEGER (dBm)        RO
+│  ├─ wespeWifiRssi.0                      .2.5.0   INTEGER (dBm)        RO
+│  └─ wespeSensorTable / wespeSensorEntry  .2.6.1   (mib_sensor_table.c, one row per sensor)
+│     ├─ wespeSensorIndex                  .1       Integer32            RO
+│     ├─ wespeSensorLabel                  .2       OCTET STRING         RW
+│     ├─ wespeSensorTempDeciC              .3       Integer32            RO
+│     ├─ wespeSensorReadCount              .4       Counter64            RO
+│     └─ wespeSensorStatus                 .5       INTEGER {ok,readError} RO
 ├─ wespeTraps                              .3
 │  ├─ wespeRelayStateChangeTrap            .3.1     NOTIFICATION-TYPE
 │  └─ wespeTemperatureThresholdTrap        .3.2     NOTIFICATION-TYPE

@@ -336,6 +336,127 @@ static const mib_table_t s_ifxtable = {
     .set_cell = NULL,
 };
 
+/* ---------------------------------------------------------------------
+ * wespeSensorTable mock (docs/PLAN-TABLES.md Phase 13b). Two rows so a
+ * real multi-row walk/GETBULK/SET-through-a-cell has something to
+ * exercise; wespeSensorLabel is genuinely mutable via SET here, same as
+ * production. Doesn't reproduce mib_sensor_table.c's row-count-varies-
+ * over-time behavior (that needs CONFIG_WESPE_SENSOR_VOLATILE_ROWS'
+ * timer, which only exists in the real Kconfig-built firmware) -- this
+ * is a fixed 2-row table, real enough for wire-level verification.
+ * ------------------------------------------------------------------- */
+
+#define WSENSOR_COL_INDEX      1u
+#define WSENSOR_COL_LABEL      2u
+#define WSENSOR_COL_TEMP       3u
+#define WSENSOR_COL_READ_COUNT 4u
+#define WSENSOR_COL_STATUS     5u
+#define WSENSOR_LABEL_MAX      32
+#define WSENSOR_ROW_COUNT      2
+
+typedef struct {
+    uint32_t index;
+    char     label[WSENSOR_LABEL_MAX];
+    int32_t  decidegrees;
+    uint64_t read_count;
+} mock_sensor_row_t;
+
+static mock_sensor_row_t s_sensor_rows[WSENSOR_ROW_COUNT] = {
+    {1, "sensor1", 235, 0},
+    {2, "sensor2", 198, 0},
+};
+
+static mock_sensor_row_t *find_sensor_row(uint32_t index)
+{
+    for (int i = 0; i < WSENSOR_ROW_COUNT; i++) {
+        if (s_sensor_rows[i].index == index) {
+            return &s_sensor_rows[i];
+        }
+    }
+    return NULL;
+}
+static mib_result_t wsensor_first_index(uint32_t *out_index)
+{
+    *out_index = s_sensor_rows[0].index;
+    return MIB_OK;
+}
+static mib_result_t wsensor_next_index(uint32_t current_index, uint32_t *out_index)
+{
+    if (current_index < WSENSOR_ROW_COUNT) {
+        *out_index = current_index + 1;
+        return MIB_OK;
+    }
+    return MIB_END_OF_VIEW;
+}
+static mib_result_t wsensor_get_cell(uint32_t column, uint32_t index, snmp_varbind_t *vb)
+{
+    mock_sensor_row_t *row = find_sensor_row(index);
+    if (row == NULL) {
+        return MIB_NO_SUCH_INSTANCE;
+    }
+    switch (column) {
+        case WSENSOR_COL_INDEX:
+            vb->value_tag = BER_TAG_INTEGER;
+            vb->int_value = (int32_t)row->index;
+            return MIB_OK;
+        case WSENSOR_COL_LABEL:
+            vb->value_tag = BER_TAG_OCTET_STRING;
+            vb->octets_len = strlen(row->label);
+            memcpy(vb->octets, row->label, vb->octets_len);
+            return MIB_OK;
+        case WSENSOR_COL_TEMP:
+            row->read_count++;
+            vb->value_tag = BER_TAG_INTEGER;
+            vb->int_value = row->decidegrees;
+            return MIB_OK;
+        case WSENSOR_COL_READ_COUNT:
+            vb->value_tag = SNMP_TAG_COUNTER64;
+            vb->counter64_value = row->read_count;
+            return MIB_OK;
+        case WSENSOR_COL_STATUS:
+            vb->value_tag = BER_TAG_INTEGER;
+            vb->int_value = 1; /* ok */
+            return MIB_OK;
+        default:
+            return MIB_GEN_ERR;
+    }
+}
+static mib_result_t wsensor_set_cell(uint32_t column, uint32_t index, const snmp_varbind_t *vb)
+{
+    mock_sensor_row_t *row = find_sensor_row(index);
+    if (row == NULL) {
+        return MIB_NO_SUCH_INSTANCE;
+    }
+    if (column != WSENSOR_COL_LABEL) {
+        return MIB_NOT_WRITABLE;
+    }
+    if (vb->value_tag != BER_TAG_OCTET_STRING || vb->octets_len >= WSENSOR_LABEL_MAX) {
+        return MIB_WRONG_VALUE;
+    }
+    memcpy(row->label, vb->octets, vb->octets_len);
+    row->label[vb->octets_len] = '\0';
+    return MIB_OK;
+}
+
+static const uint32_t WSENSOR_TABLE_ENTRY_OID[] = {1, 3, 6, 1, 4, 1, 99999, 2, 6, 1};
+static const mib_column_t s_wsensor_columns[] = {
+    {WSENSOR_COL_INDEX, BER_TAG_INTEGER, MIB_ACCESS_RO},
+    {WSENSOR_COL_LABEL, BER_TAG_OCTET_STRING, MIB_ACCESS_RW},
+    {WSENSOR_COL_TEMP, BER_TAG_INTEGER, MIB_ACCESS_RO},
+    {WSENSOR_COL_READ_COUNT, SNMP_TAG_COUNTER64, MIB_ACCESS_RO},
+    {WSENSOR_COL_STATUS, BER_TAG_INTEGER, MIB_ACCESS_RO},
+};
+static const mib_table_t s_wsensor_table = {
+    .entry_oid = WSENSOR_TABLE_ENTRY_OID,
+    .entry_oid_len = 10,
+    .columns = s_wsensor_columns,
+    .column_count = sizeof(s_wsensor_columns) / sizeof(s_wsensor_columns[0]),
+    .first_index = wsensor_first_index,
+    .next_index = wsensor_next_index,
+    .get_cell = wsensor_get_cell,
+    .set_cell = wsensor_set_cell,
+};
+
 int main(int argc, char **argv)
 {
     int port = DEV_AGENT_DEFAULT_PORT;
@@ -350,6 +471,7 @@ int main(int argc, char **argv)
     mib_registry_register_module(s_mib_iftable_scalars, sizeof(s_mib_iftable_scalars) / sizeof(s_mib_iftable_scalars[0]));
     mib_registry_register_table(&s_iftable);
     mib_registry_register_table(&s_ifxtable);
+    mib_registry_register_table(&s_wsensor_table);
     snmp_security_community_init("public", "private");
     snmp_security_usm_stub_init();
 
