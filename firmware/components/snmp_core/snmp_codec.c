@@ -28,6 +28,8 @@ ber_status_t snmp_decode_value(const ber_tlv_t *tlv, snmp_varbind_t *vb)
             vb->int_value = (int32_t)u;
             return st;
         }
+        case SNMP_TAG_COUNTER64:
+            return ber_decode_unsigned64(tlv, &vb->counter64_value);
         case SNMP_TAG_IPADDRESS:
         case SNMP_TAG_OPAQUE:
             /* Byte-string-shaped application types, carried like an OCTET
@@ -66,6 +68,8 @@ ber_status_t snmp_encode_value(uint8_t *buf, size_t cap, size_t *cursor, const s
         case SNMP_TAG_GAUGE32:
         case SNMP_TAG_TIMETICKS:
             return ber_encode_unsigned_tagged(buf, cap, cursor, vb->value_tag, (uint32_t)vb->int_value);
+        case SNMP_TAG_COUNTER64:
+            return ber_encode_unsigned64_tagged(buf, cap, cursor, vb->value_tag, vb->counter64_value);
         case SNMP_TAG_NO_SUCH_OBJECT:
         case SNMP_TAG_NO_SUCH_INSTANCE:
         case SNMP_TAG_END_OF_MIB_VIEW:

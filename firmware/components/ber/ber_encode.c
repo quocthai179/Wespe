@@ -139,6 +139,32 @@ ber_status_t ber_encode_unsigned_tagged(uint8_t *buf, size_t cap, size_t *cursor
     return ber_encode_prepend_tlv_header(buf, cap, cursor, tag, content_len);
 }
 
+ber_status_t ber_encode_unsigned64_tagged(uint8_t *buf, size_t cap, size_t *cursor, uint8_t tag, uint64_t value)
+{
+    /* Same algorithm as ber_encode_unsigned_tagged(), one width up: 8
+     * value bytes plus a leading pad candidate. */
+    uint8_t raw[9];
+    raw[0] = 0x00u;
+    for (int i = 0; i < 8; i++) {
+        raw[1 + i] = (uint8_t)(value >> (8 * (7 - i)));
+    }
+
+    size_t start = 1;
+    while (start < 8 && raw[start] == 0x00u && (raw[start + 1] & 0x80u) == 0) {
+        start++;
+    }
+    if ((raw[start] & 0x80u) != 0) {
+        start--;
+    }
+
+    size_t content_len = 9 - start;
+    ber_status_t st = ber_encode_prepend_bytes(buf, cap, cursor, raw + start, content_len);
+    if (st != BER_OK) {
+        return st;
+    }
+    return ber_encode_prepend_tlv_header(buf, cap, cursor, tag, content_len);
+}
+
 ber_status_t ber_encode_octet_string(uint8_t *buf, size_t cap, size_t *cursor, const uint8_t *data, size_t len)
 {
     ber_status_t st = ber_encode_prepend_bytes(buf, cap, cursor, data, len);

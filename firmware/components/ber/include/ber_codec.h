@@ -35,6 +35,9 @@ ber_status_t ber_expect_tag(const uint8_t *buf, size_t len, unsigned depth, uint
 ber_status_t ber_decode_integer(const ber_tlv_t *tlv, int32_t *out);
 /* Counter32 / Gauge32 (Unsigned32) / TimeTicks all share this shape. */
 ber_status_t ber_decode_unsigned(const ber_tlv_t *tlv, uint32_t *out);
+/* Counter64 -- same shape, widened to 64 bits (up to 9 content bytes: 8
+ * value bytes plus a possible leading 0x00 pad). */
+ber_status_t ber_decode_unsigned64(const ber_tlv_t *tlv, uint64_t *out);
 ber_status_t ber_decode_octet_string(const ber_tlv_t *tlv, uint8_t *out, size_t out_cap, size_t *out_len);
 ber_status_t ber_decode_null(const ber_tlv_t *tlv);
 ber_status_t ber_decode_oid(const ber_tlv_t *tlv, uint32_t *out, size_t out_cap, size_t *out_len);
@@ -60,6 +63,10 @@ ber_status_t ber_encode_integer(uint8_t *buf, size_t cap, size_t *cursor, int32_
 /* `tag` selects Counter32/Gauge32/TimeTicks/Unsigned32 -- same wire shape,
  * different application tag. */
 ber_status_t ber_encode_unsigned_tagged(uint8_t *buf, size_t cap, size_t *cursor, uint8_t tag, uint32_t value);
+/* Counter64, same shape widened to 64 bits -- `tag` is always
+ * SNMP_TAG_COUNTER64 in practice, taken as a parameter for symmetry with
+ * ber_encode_unsigned_tagged() rather than hardcoded. */
+ber_status_t ber_encode_unsigned64_tagged(uint8_t *buf, size_t cap, size_t *cursor, uint8_t tag, uint64_t value);
 ber_status_t ber_encode_octet_string(uint8_t *buf, size_t cap, size_t *cursor, const uint8_t *data, size_t len);
 ber_status_t ber_encode_null(uint8_t *buf, size_t cap, size_t *cursor);
 /* Encodes a zero-length value under an arbitrary tag -- used both for plain

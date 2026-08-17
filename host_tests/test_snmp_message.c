@@ -129,6 +129,32 @@ static void setup_with_table(void)
     s_table_row2_value = 20;
 }
 
+/* A Counter64-valued scalar (docs/PLAN-TABLES.md Phase 12), registered as
+ * its own module right after OID_C in OID space -- registered separately
+ * from setup()/setup_with_table() for the same "don't shift an existing
+ * end-of-view boundary" reason. Value exceeds 32 bits so a truncating bug
+ * (e.g. accidentally routing it through the 32-bit unsigned path) would be
+ * caught by a value mismatch, not just a tag mismatch. */
+static uint64_t s_mock_d_value = 0x1FFFFFFFFULL; /* > UINT32_MAX */
+
+static mib_result_t get_d(snmp_varbind_t *vb)
+{
+    vb->value_tag = SNMP_TAG_COUNTER64;
+    vb->counter64_value = s_mock_d_value;
+    return MIB_OK;
+}
+
+static const uint32_t OID_D[] = {1, 3, 6, 1, 4, 1, 11111, 5, 0};
+static const mib_object_t s_mock_counter64_objects[] = {
+    {OID_D, 9, SNMP_TAG_COUNTER64, MIB_ACCESS_RO, get_d, NULL},
+};
+
+static void setup_with_counter64(void)
+{
+    setup();
+    mib_registry_register_module(s_mock_counter64_objects, 1);
+}
+
 static snmp_varbind_t make_null_varbind(const uint32_t *oid, size_t oid_len)
 {
     snmp_varbind_t vb;
@@ -320,6 +346,113 @@ UM_TEST(test_get_next_request_walks_to_first_object)
         UM_CHECK_EQ_INT(resp.varbinds[0].oid[i], OID_A[i]);
     }
     UM_CHECK_EQ_INT(resp.varbinds[0].int_value, 100);
+}
+
+UM_TEST(test_v2c_get_counter64_returns_value)
+{
+    /* No skip/exception treatment under v2c -- Counter64 is a completely
+     * normal object there. */
+    setup_with_counter64();
+    snmp_varbind_t req_vb = make_null_varbind(OID_D, 9);
+    uint8_t packet[512];
+    size_t packet_len = build_request(SNMP_VERSION_V2C, SNMP_PDU_GET_REQUEST, "public", 30, 0, 0, &req_vb, 1, packet, sizeof(packet));
+    UM_CHECK(packet_len > 0);
+
+    uint8_t response[512];
+    size_t response_len = snmp_message_process(packet, packet_len, response, sizeof(response));
+    UM_CHECK(response_len > 0);
+
+    snmp_pdu_ctx_t resp;
+    UM_CHECK(decode_message_any_tag(response, response_len, &resp));
+    UM_CHECK_EQ_INT(resp.error_status, 0);
+    UM_CHECK_EQ_INT(resp.varbinds[0].value_tag, SNMP_TAG_COUNTER64);
+    UM_CHECK(resp.varbinds[0].counter64_value == s_mock_d_value);
+}
+
+UM_TEST(test_v1_get_counter64_returns_no_such_name)
+{
+    /* RFC2089/RFC3584: a v1 GET of a Counter64 object must be answered
+     * noSuchName, exactly like the object didn't exist at all. */
+    setup_with_counter64();
+    snmp_varbind_t req_vb = make_null_varbind(OID_D, 9);
+    uint8_t packet[512];
+    size_t packet_len = build_request(SNMP_VERSION_V1, SNMP_PDU_GET_REQUEST, "public", 31, 0, 0, &req_vb, 1, packet, sizeof(packet));
+    UM_CHECK(packet_len > 0);
+
+    uint8_t response[512];
+    size_t response_len = snmp_message_process(packet, packet_len, response, sizeof(response));
+    UM_CHECK(response_len > 0);
+
+    snmp_pdu_ctx_t resp;
+    UM_CHECK(decode_message_any_tag(response, response_len, &resp));
+    UM_CHECK_EQ_INT(resp.error_status, SNMP_V1_ERR_NO_SUCH_NAME);
+    UM_CHECK_EQ_INT(resp.error_index, 1);
+    UM_CHECK_EQ_INT(resp.varbinds[0].value_tag, BER_TAG_NULL); /* echoed original request */
+}
+
+UM_TEST(test_v2c_getnext_reaches_counter64)
+{
+    setup_with_counter64();
+    snmp_varbind_t req_vb = make_null_varbind(OID_C, 9); /* last plain-INTEGER scalar */
+    uint8_t packet[512];
+    size_t packet_len = build_request(SNMP_VERSION_V2C, SNMP_PDU_GET_NEXT_REQUEST, "public", 32, 0, 0, &req_vb, 1, packet, sizeof(packet));
+    uint8_t response[512];
+    size_t response_len = snmp_message_process(packet, packet_len, response, sizeof(response));
+    UM_CHECK(response_len > 0);
+
+    snmp_pdu_ctx_t resp;
+    UM_CHECK(decode_message_any_tag(response, response_len, &resp));
+    UM_CHECK_EQ_INT(resp.varbinds[0].oid_len, 9);
+    for (int i = 0; i < 9; i++) {
+        UM_CHECK_EQ_INT(resp.varbinds[0].oid[i], OID_D[i]);
+    }
+    UM_CHECK_EQ_INT(resp.varbinds[0].value_tag, SNMP_TAG_COUNTER64);
+    UM_CHECK(resp.varbinds[0].counter64_value == s_mock_d_value);
+}
+
+UM_TEST(test_v1_getnext_walks_past_counter64_to_end_of_view)
+{
+    /* OID_D is the last registered object in this fixture; a v1 walk
+     * starting right before it must not stop *on* it (it's invisible to
+     * v1), and since nothing follows it either, the walk falls straight
+     * through to noSuchName (v1's spelling of end-of-MIB-view) rather than
+     * ever exposing the Counter64 value on the wire. */
+    setup_with_counter64();
+    snmp_varbind_t req_vb = make_null_varbind(OID_C, 9);
+    uint8_t packet[512];
+    size_t packet_len = build_request(SNMP_VERSION_V1, SNMP_PDU_GET_NEXT_REQUEST, "public", 33, 0, 0, &req_vb, 1, packet, sizeof(packet));
+    uint8_t response[512];
+    size_t response_len = snmp_message_process(packet, packet_len, response, sizeof(response));
+    UM_CHECK(response_len > 0);
+
+    snmp_pdu_ctx_t resp;
+    UM_CHECK(decode_message_any_tag(response, response_len, &resp));
+    UM_CHECK_EQ_INT(resp.error_status, SNMP_V1_ERR_NO_SUCH_NAME);
+    UM_CHECK_EQ_INT(resp.error_index, 1);
+    for (int i = 0; i < 9; i++) {
+        UM_CHECK_EQ_INT(resp.varbinds[0].oid[i], OID_C[i]); /* echoed original request */
+    }
+}
+
+UM_TEST(test_getbulk_walks_through_counter64_v2c)
+{
+    /* GETBULK is v2c/v3-only (rejected outright for v1 elsewhere), so it
+     * never needs the skip logic -- this just confirms Counter64 flows
+     * through the bulk path like any other value. */
+    setup_with_counter64();
+    snmp_varbind_t req_vb = make_null_varbind(OID_C, 9);
+    uint8_t packet[512];
+    size_t packet_len = build_request(SNMP_VERSION_V2C, SNMP_PDU_GET_BULK_REQUEST, "public", 34, 0, 2, &req_vb, 1, packet, sizeof(packet));
+    uint8_t response[512];
+    size_t response_len = snmp_message_process(packet, packet_len, response, sizeof(response));
+    UM_CHECK(response_len > 0);
+
+    snmp_pdu_ctx_t resp;
+    UM_CHECK(decode_message_any_tag(response, response_len, &resp));
+    UM_CHECK_EQ_INT(resp.varbind_count, 2);
+    UM_CHECK_EQ_INT(resp.varbinds[0].value_tag, SNMP_TAG_COUNTER64);
+    UM_CHECK(resp.varbinds[0].counter64_value == s_mock_d_value);
+    UM_CHECK_EQ_INT(resp.varbinds[1].value_tag, SNMP_TAG_END_OF_MIB_VIEW);
 }
 
 UM_TEST(test_set_request_dropped_without_write_access)
@@ -604,6 +737,11 @@ int main(void)
     UM_RUN(test_get_request_v1_no_such_name);
     UM_RUN(test_get_request_v2c_no_such_object);
     UM_RUN(test_get_next_request_walks_to_first_object);
+    UM_RUN(test_v2c_get_counter64_returns_value);
+    UM_RUN(test_v1_get_counter64_returns_no_such_name);
+    UM_RUN(test_v2c_getnext_reaches_counter64);
+    UM_RUN(test_v1_getnext_walks_past_counter64_to_end_of_view);
+    UM_RUN(test_getbulk_walks_through_counter64_v2c);
     UM_RUN(test_set_request_dropped_without_write_access);
     UM_RUN(test_set_request_success);
     UM_RUN(test_set_request_on_read_only_object);

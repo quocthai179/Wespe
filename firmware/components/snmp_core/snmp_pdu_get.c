@@ -14,24 +14,55 @@ typedef enum {
     LOOKUP_NEXT,
 } lookup_mode_t;
 
+/* Safety net for the v1-Counter64-skip loop below: a real MIB never has
+ * anywhere near this many consecutive Counter64 columns/rows, so hitting
+ * this guard means something is misconfigured, not that the walk is
+ * legitimately still in progress. Bounds the loop instead of ever spinning
+ * on a (theoretically impossible, but not worth trusting blindly) cycle. */
+#define SNMP_V1_COUNTER64_SKIP_GUARD 64
+
 /* Resolves `request_vb`'s OID (exact match for GET, lower-bound successor
  * for GETNEXT) -- against scalars *and* table cells alike, via
  * mib_registry_resolve*() (docs/PLAN-TABLES.md Phase 11) -- and, on
  * success, fills `out_vb` starting from the *resolved instance's* OID
  * (identical to the request's OID for GET; the walked-to OID for
  * GETNEXT, which for a table cell includes the row index) and then its
- * value. Does not touch `request_vb`. */
-static mib_result_t lookup_and_fetch(lookup_mode_t mode, const snmp_varbind_t *request_vb, snmp_varbind_t *out_vb)
+ * value. Does not touch `request_vb`.
+ *
+ * Counter64 (SNMP_TAG_COUNTER64) does not exist in SNMPv1 (RFC2089 /
+ * RFC3584): a v1 GET of one must answer noSuchName, and a v1 GETNEXT/walk
+ * must silently step past it as though it weren't registered at all. Both
+ * are enforced here, the one place every read path funnels through, so
+ * GETBULK (which already rejects non-v2c requests outright in
+ * snmp_pdu_getbulk.c) is the only read path that doesn't need this check. */
+static mib_result_t lookup_and_fetch(snmp_version_t version, lookup_mode_t mode, const snmp_varbind_t *request_vb, snmp_varbind_t *out_vb)
 {
-    mib_resolved_t resolved;
-    mib_result_t r = (mode == LOOKUP_EXACT) ? mib_registry_resolve(request_vb->oid, request_vb->oid_len, &resolved)
-                                             : mib_registry_resolve_next(request_vb->oid, request_vb->oid_len, &resolved);
-    if (r != MIB_OK) {
-        return r; /* NO_SUCH_OBJECT / NO_SUCH_INSTANCE / END_OF_VIEW, as appropriate */
+    snmp_varbind_t current = *request_vb;
+
+    for (int guard = 0; guard < SNMP_V1_COUNTER64_SKIP_GUARD; guard++) {
+        mib_resolved_t resolved;
+        mib_result_t r = (mode == LOOKUP_EXACT) ? mib_registry_resolve(current.oid, current.oid_len, &resolved)
+                                                  : mib_registry_resolve_next(current.oid, current.oid_len, &resolved);
+        if (r != MIB_OK) {
+            return r; /* NO_SUCH_OBJECT / NO_SUCH_INSTANCE / END_OF_VIEW, as appropriate */
+        }
+
+        if (version == SNMP_VERSION_V1 && resolved.value_tag == SNMP_TAG_COUNTER64) {
+            if (mode == LOOKUP_EXACT) {
+                return MIB_NO_SUCH_OBJECT; /* -> v1 noSuchName, per RFC2089/RFC3584 */
+            }
+            /* GETNEXT: treat this instance as invisible and keep walking
+             * from where it left off. */
+            memcpy(current.oid, resolved.oid, (size_t)resolved.oid_len * sizeof(uint32_t));
+            current.oid_len = resolved.oid_len;
+            continue;
+        }
+
+        out_vb->oid_len = resolved.oid_len;
+        memcpy(out_vb->oid, resolved.oid, (size_t)resolved.oid_len * sizeof(uint32_t));
+        return mib_resolved_get(&resolved, out_vb);
     }
-    out_vb->oid_len = resolved.oid_len;
-    memcpy(out_vb->oid, resolved.oid, (size_t)resolved.oid_len * sizeof(uint32_t));
-    return mib_resolved_get(&resolved, out_vb);
+    return MIB_GEN_ERR; /* guard exhausted -- see comment above */
 }
 
 static ber_status_t process_read_pdu(snmp_pdu_ctx_t *ctx, lookup_mode_t mode)
@@ -45,7 +76,7 @@ static ber_status_t process_read_pdu(snmp_pdu_ctx_t *ctx, lookup_mode_t mode)
         for (size_t i = 0; i < ctx->varbind_count; i++) {
             snmp_varbind_t scratch;
             memset(&scratch, 0, sizeof(scratch));
-            mib_result_t res = lookup_and_fetch(mode, &ctx->varbinds[i], &scratch);
+            mib_result_t res = lookup_and_fetch(ctx->version, mode, &ctx->varbinds[i], &scratch);
             snmp_error_translation_t tr = snmp_error_translate(ctx->version, res);
             if (tr.pdu_level_abort) {
                 ctx->pdu_tag = SNMP_PDU_GET_RESPONSE;
@@ -58,7 +89,7 @@ static ber_status_t process_read_pdu(snmp_pdu_ctx_t *ctx, lookup_mode_t mode)
          * into ctx->varbinds -- pass 1 already guarantees every one
          * succeeds. */
         for (size_t i = 0; i < ctx->varbind_count; i++) {
-            (void)lookup_and_fetch(mode, &ctx->varbinds[i], &ctx->varbinds[i]);
+            (void)lookup_and_fetch(ctx->version, mode, &ctx->varbinds[i], &ctx->varbinds[i]);
         }
         ctx->pdu_tag = SNMP_PDU_GET_RESPONSE;
         ctx->error_status = SNMP_V1_ERR_NO_ERROR;
@@ -71,7 +102,7 @@ static ber_status_t process_read_pdu(snmp_pdu_ctx_t *ctx, lookup_mode_t mode)
     for (size_t i = 0; i < ctx->varbind_count; i++) {
         snmp_varbind_t scratch;
         memset(&scratch, 0, sizeof(scratch));
-        mib_result_t res = lookup_and_fetch(mode, &ctx->varbinds[i], &scratch);
+        mib_result_t res = lookup_and_fetch(ctx->version, mode, &ctx->varbinds[i], &scratch);
         snmp_error_translation_t tr = snmp_error_translate(ctx->version, res);
         if (tr.pdu_level_abort) {
             ctx->pdu_tag = SNMP_PDU_GET_RESPONSE;

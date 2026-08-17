@@ -74,6 +74,41 @@ UM_TEST(test_encode_unsigned_zero)
     UM_CHECK_EQ_MEM(buf + cursor, expect, sizeof(expect));
 }
 
+UM_TEST(test_encode_counter64_max)
+{
+    /* Same pad-byte-minimality rule as Counter32/Gauge32/TimeTicks, one
+     * width up: 0xFFFFFFFFFFFFFFFF needs a leading 0x00 pad so it isn't
+     * misread as a negative two's-complement value. */
+    uint8_t buf[16];
+    size_t cursor = sizeof(buf);
+    UM_CHECK_EQ_INT(ber_encode_unsigned64_tagged(buf, sizeof(buf), &cursor, SNMP_TAG_COUNTER64, 0xFFFFFFFFFFFFFFFFull), BER_OK);
+    uint8_t expect[] = {SNMP_TAG_COUNTER64, 0x09, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    UM_CHECK_EQ_INT(sizeof(buf) - cursor, sizeof(expect));
+    UM_CHECK_EQ_MEM(buf + cursor, expect, sizeof(expect));
+}
+
+UM_TEST(test_encode_counter64_zero)
+{
+    uint8_t buf[16];
+    size_t cursor = sizeof(buf);
+    UM_CHECK_EQ_INT(ber_encode_unsigned64_tagged(buf, sizeof(buf), &cursor, SNMP_TAG_COUNTER64, 0), BER_OK);
+    uint8_t expect[] = {SNMP_TAG_COUNTER64, 0x01, 0x00};
+    UM_CHECK_EQ_INT(sizeof(buf) - cursor, sizeof(expect));
+    UM_CHECK_EQ_MEM(buf + cursor, expect, sizeof(expect));
+}
+
+UM_TEST(test_encode_counter64_needs_more_than_32_bits)
+{
+    /* 0x100000000 (2^32) doesn't fit in 4 bytes -- exercises the width
+     * this type exists for, beyond what Counter32/Gauge32 could ever hold. */
+    uint8_t buf[16];
+    size_t cursor = sizeof(buf);
+    UM_CHECK_EQ_INT(ber_encode_unsigned64_tagged(buf, sizeof(buf), &cursor, SNMP_TAG_COUNTER64, 0x100000000ull), BER_OK);
+    uint8_t expect[] = {SNMP_TAG_COUNTER64, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00};
+    UM_CHECK_EQ_INT(sizeof(buf) - cursor, sizeof(expect));
+    UM_CHECK_EQ_MEM(buf + cursor, expect, sizeof(expect));
+}
+
 UM_TEST(test_encode_octet_string)
 {
     uint8_t buf[16];
@@ -215,6 +250,22 @@ UM_TEST(test_unsigned_round_trip_sweep)
     }
 }
 
+UM_TEST(test_counter64_round_trip_sweep)
+{
+    uint64_t values[] = {0, 1, 127, 128, 255, 256, 0xFFFFFFFFull, 0x100000000ull,
+                          0x7FFFFFFFFFFFFFFFull, 0x8000000000000000ull, 0xFFFFFFFFFFFFFFFFull};
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        uint8_t buf[16];
+        size_t cursor = sizeof(buf);
+        UM_CHECK_EQ_INT(ber_encode_unsigned64_tagged(buf, sizeof(buf), &cursor, SNMP_TAG_COUNTER64, values[i]), BER_OK);
+        ber_tlv_t tlv;
+        UM_CHECK_EQ_INT(ber_decode_tlv(buf + cursor, sizeof(buf) - cursor, 0, &tlv), BER_OK);
+        uint64_t out = 0;
+        UM_CHECK_EQ_INT(ber_decode_unsigned64(&tlv, &out), BER_OK);
+        UM_CHECK(out == values[i]);
+    }
+}
+
 int main(void)
 {
     UM_RUN(test_encode_integer_zero);
@@ -224,6 +275,9 @@ int main(void)
     UM_RUN(test_encode_integer_128_needs_pad_byte);
     UM_RUN(test_encode_unsigned_gauge32_max);
     UM_RUN(test_encode_unsigned_zero);
+    UM_RUN(test_encode_counter64_max);
+    UM_RUN(test_encode_counter64_zero);
+    UM_RUN(test_encode_counter64_needs_more_than_32_bits);
     UM_RUN(test_encode_octet_string);
     UM_RUN(test_encode_octet_string_long_form_length);
     UM_RUN(test_encode_null);
@@ -235,5 +289,6 @@ int main(void)
     UM_RUN(test_encode_overflow_when_buffer_too_small);
     UM_RUN(test_integer_round_trip_sweep);
     UM_RUN(test_unsigned_round_trip_sweep);
+    UM_RUN(test_counter64_round_trip_sweep);
     return um_summary();
 }

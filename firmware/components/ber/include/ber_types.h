@@ -25,13 +25,18 @@ typedef enum {
 #define BER_TAG_OID          0x06u
 #define BER_TAG_SEQUENCE     0x30u /* universal, constructed */
 
-/* SNMP application-class types (tag = 0x40 | n). Counter64 (0x46) is
- * intentionally not implemented -- see docs/v3-readiness.md open items. */
+/* SNMP application-class types (tag = 0x40 | n). */
 #define SNMP_TAG_IPADDRESS 0x40u
 #define SNMP_TAG_COUNTER32 0x41u
 #define SNMP_TAG_GAUGE32   0x42u /* == Unsigned32 */
 #define SNMP_TAG_TIMETICKS 0x43u
 #define SNMP_TAG_OPAQUE    0x44u
+/* SNMPv2's "high capacity" 64-bit counter (RFC2578 7.1.10). Does NOT
+ * exist in SNMPv1 -- RFC 2089 / RFC 3584 require a v1 manager never see
+ * one: a v1 GET of a Counter64 object must answer noSuchName, and a v1
+ * GETNEXT/walk must silently skip over it as if it weren't registered at
+ * all. See snmp_pdu_get.c's lookup_and_fetch() for where that's enforced. */
+#define SNMP_TAG_COUNTER64 0x46u
 
 /* SNMPv2c exception values (RFC3416 3.2.2): context-specific, primitive,
  * zero-length content -- structurally like NULL but a different tag. */

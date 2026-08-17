@@ -43,7 +43,7 @@ typedef struct {
 
     union {
         int32_t  int_value;      /* INTEGER, Counter32/Gauge32/TimeTicks (unsigned reinterpreted) */
-        uint64_t counter64_value; /* Counter64 -- see docs/PLAN-TABLES.md Phase 12 */
+        uint64_t counter64_value; /* Counter64 (SNMP_TAG_COUNTER64) -- RFC2578 7.1.10, v2c/v3 only */
         struct {
             uint8_t octets[SNMP_MAX_OCTETS_LEN]; /* OCTET STRING content */
             size_t  octets_len;
