@@ -23,7 +23,17 @@ extern "C" {
  * MIB modules to serve (mib_ii_register(), mib_wespe_register(), or a
  * test's own mock module) before calling this -- kept explicit rather
  * than hidden behind an init() function so tests can register only what a
- * given test actually needs. */
+ * given test actually needs.
+ *
+ * NOT REENTRANT: the request/response context (multiple KB, see
+ * snmp_pdu.h's WESPE_PDU_CTX_BUDGET_BYTES) lives in a single `static`
+ * instance inside snmp_message.c rather than on the caller's stack --
+ * that's what makes a context that size safe to carry at all on an
+ * embedded task stack. This is correct for the one real caller
+ * (components/transport/snmp_udp.c's single UDP task, which processes
+ * one datagram at a time to completion before the next) and for
+ * tools/dev_agent.c's single-threaded loop, but means this function must
+ * never be called concurrently from more than one task/thread. */
 size_t snmp_message_process(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_cap);
 
 #ifdef __cplusplus

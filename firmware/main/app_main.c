@@ -15,6 +15,8 @@
 
 #include "mib_ii.h"
 #include "mib_wespe.h"
+#include "mib_iftable.h"
+#include "mib_sensor_table.h"
 
 #include "sensor.h"
 #include "relay.h"
@@ -51,6 +53,8 @@ void app_main(void)
     snmp_security_usm_stub_init();
     mib_ii_register();
     mib_wespe_register();
+    mib_iftable_register();
+    mib_sensor_table_register();
 
     if (strlen(CONFIG_WESPE_TRAP_DEST_IP) > 0) {
         if (snmp_transport_set_trap_destination(CONFIG_WESPE_TRAP_DEST_IP) != 0) {

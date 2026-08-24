@@ -10,6 +10,14 @@
 #include "snmp_pdu.h"
 #include <string.h>
 
+/* See snmp_message.h's NOT REENTRANT note: this lives here, not on the
+ * caller's stack, specifically because sizeof(snmp_pdu_ctx_t) is multiple
+ * KB (see snmp_pdu.h's WESPE_PDU_CTX_BUDGET_BYTES) -- too large to carry
+ * safely on a FreeRTOS task's typical stack allocation. A single
+ * `static` instance is correct because there is exactly one caller in
+ * production (the UDP task) processing one datagram at a time. */
+static snmp_pdu_ctx_t s_ctx;
+
 size_t snmp_message_process(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_cap)
 {
     if (in == NULL || out == NULL || in_len == 0 || out_cap == 0) {
@@ -43,20 +51,19 @@ size_t snmp_message_process(const uint8_t *in, size_t in_len, uint8_t *out, size
         return 0; /* unsupported version -- drop, don't guess at an error response */
     }
 
-    snmp_pdu_ctx_t ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    st = model->process_incoming(in, in_len, 0, &ctx);
+    memset(&s_ctx, 0, sizeof(s_ctx));
+    st = model->process_incoming(in, in_len, 0, &s_ctx);
     if (st != BER_OK) {
         return 0; /* bad community / malformed PDU / v3 decline -- drop */
     }
 
-    st = snmp_dispatch_pdu(&ctx);
+    st = snmp_dispatch_pdu(&s_ctx);
     if (st != BER_OK) {
         return 0; /* e.g. SetRequest without write access, or an unanswerable PDU type -- drop */
     }
 
     size_t out_len = 0;
-    st = model->prepare_outgoing(&ctx, out, out_cap, &out_len);
+    st = model->prepare_outgoing(&s_ctx, out, out_cap, &out_len);
     if (st != BER_OK) {
         return 0; /* e.g. response doesn't fit in out_cap -- fail safe, never send a truncated packet */
     }

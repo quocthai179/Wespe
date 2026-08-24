@@ -24,12 +24,65 @@ iso.org.dod.internet.private.enterprises.99999   wespeMIB   (custom, mib_wespe.c
 │  ├─ wespeRelayState.0                    .2.2.0   INTEGER {off,on}     RW
 │  ├─ wespeUptimeSeconds.0                 .2.3.0   Gauge32              RO
 │  ├─ wespeFreeHeapBytes.0                 .2.4.0   Gauge32              RO
-│  └─ wespeWifiRssi.0                      .2.5.0   INTEGER (dBm)        RO
+│  ├─ wespeWifiRssi.0                      .2.5.0   INTEGER (dBm)        RO
+│  └─ wespeSensorTable / wespeSensorEntry  .2.6.1   (mib_sensor_table.c, one row per sensor)
+│     ├─ wespeSensorIndex                  .1       Integer32            RO
+│     ├─ wespeSensorLabel                  .2       OCTET STRING         RW
+│     ├─ wespeSensorTempDeciC              .3       Integer32            RO
+│     ├─ wespeSensorReadCount              .4       Counter64            RO
+│     └─ wespeSensorStatus                 .5       INTEGER {ok,readError} RO
 ├─ wespeTraps                              .3
 │  ├─ wespeRelayStateChangeTrap            .3.1     NOTIFICATION-TYPE
 │  └─ wespeTemperatureThresholdTrap        .3.2     NOTIFICATION-TYPE
 └─ wespeConformance                        .4       (OBJECT-GROUP / MODULE-COMPLIANCE)
 ```
+
+```
+iso.org.dod.internet.mgmt.mib-2.interfaces   1.3.6.1.2.1.2   (standard IF-MIB subset, mib_iftable.c)
+├─ ifNumber.0                     .1.0   INTEGER       RO  (= 1: the WiFi station)
+└─ ifTable / ifEntry              .2.1
+   ├─ ifIndex                     .1     INTEGER       RO
+   ├─ ifDescr                     .2     OCTET STRING  RO
+   ├─ ifType                      .3     INTEGER       RO  (71 = ieee80211)
+   ├─ ifMtu                       .4     INTEGER       RO
+   ├─ ifSpeed                     .5     Gauge32       RO
+   ├─ ifPhysAddress               .6     OCTET STRING  RO  (real MAC)
+   ├─ ifAdminStatus               .7     INTEGER       RO
+   ├─ ifOperStatus                .8     INTEGER       RO
+   ├─ ifLastChange                .9     TimeTicks     RO
+   ├─ ifInOctets                  .10    Counter32     RO  (known gap, see below)
+   └─ ifOutOctets                 .16    Counter32     RO  (known gap, see below)
+
+iso.org.dod.internet.mgmt.mib-2.31.1.1.1   ifXTable / ifXEntry   1.3.6.1.2.1.31.1.1.1   (mib_iftable.c)
+├─ ifName          .1    OCTET STRING  RO
+├─ ifHCInOctets     .6    Counter64     RO  (known gap, see below)
+└─ ifHCOutOctets    .10   Counter64     RO  (known gap, see below)
+```
+
+Both are **standard IANA MIBs** (RFC1213/RFC2863) -- unlike WESPE-MIB,
+their `.txt` module definitions live in every serious NMS and
+`net-snmp`'s own MIB directory already, not in `mibs/`; implementing the
+well-known OIDs correctly is all that's needed for `snmpwalk -m ALL`/an
+NMS auto-discovery pass to render them with proper names automatically.
+Row count is permanently 1 (the WiFi station is this device's only real
+network interface) -- see `mib_iftable.c`'s `if_first_index()`/
+`if_next_index()`.
+
+**Known gap:** `ifInOctets`/`ifOutOctets`/`ifHCInOctets`/`ifHCOutOctets`
+currently always report `0`. The intent (docs/PLAN-TABLES.md Phase 13a)
+was sourcing them from lwIP's per-netif `mib2_counters`
+(`LWIP_MIB2_CALLBACKS`), but confirming that's actually enabled and
+populated on ESP-IDF v5.3 requires real hardware bring-up, which hasn't
+happened yet (see [`hardware-wiring.md`](hardware-wiring.md)). Reporting
+a fabricated nonzero number would be strictly worse than a correctly-
+typed, honestly-zero counter, so this is a documented placeholder to
+revisit once hardware exists -- not a bug. Every other ifTable/ifXTable
+column above is real device data (`sysinfo_wifi_mac()`,
+`sysinfo_wifi_oper_up()`, etc. -- see `device_hal/sysinfo.h`).
+`tools/dev_agent/dev_agent.c`'s mock versions of these two tables *do*
+report nonzero, climbing counters, specifically so the table-walk/
+GETBULK/Counter64 machinery has something realistic to exercise without
+waiting on that hardware verification.
 
 `99999` is a **placeholder**, not a real IANA-assigned Private Enterprise
 Number — see the open item in [`v3-readiness.md`](v3-readiness.md).
@@ -54,11 +107,16 @@ up immediately as `smilint` documenting one OID while the agent actually
 answers a different one at that address — worth checking whenever either
 file changes.
 
-**Why scalars only.** The registry (`mib_registry.c`) is a flat sorted
-array with no notion of conceptual/indexed tables (`SEQUENCE OF`,
-`INDEX`). Fine for ~15-25 fixed scalar objects; would need extending
-before, say, exposing multiple temperature sensors as table rows —
-explicitly deferred, see `PLAN.md`'s open items.
+**Scalars and conceptual tables.** `mib_ii.c`/`mib_wespe.c` register flat
+`mib_object_t` arrays (scalars) the same way they always have; `mib_iftable.c`
+(and Phase 13b's `mib_sensor_table.c`) instead register a `mib_table_t`
+(`mib_table.h`) -- column definitions plus row-iteration/cell-access
+callbacks, no `SEQUENCE OF`/`INDEX` machinery of their own to hand-roll
+per table. The registry (`mib_registry.c`) resolves both kinds through
+one unified API (`mib_registry_resolve()`/`_resolve_next()`) so
+`snmp_core`'s PDU handlers never branch on which kind an OID names — see
+`docs/PLAN-TABLES.md` Phase 11 for the design and `mib_table.h`'s comments
+for the column-major GETNEXT-ordering contract implementers must follow.
 
 **Why `wespeTemperature` is `INTEGER` in tenths, not a float.** SNMP/BER
 has no native floating-point type (SMIv2's `Integer32`/`Gauge32` are it).

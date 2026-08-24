@@ -131,6 +131,28 @@ ber_status_t ber_decode_unsigned(const ber_tlv_t *tlv, uint32_t *out)
     return BER_OK;
 }
 
+ber_status_t ber_decode_unsigned64(const ber_tlv_t *tlv, uint64_t *out)
+{
+    if (tlv == NULL || out == NULL) {
+        return BER_ERR_BAD_ARGS;
+    }
+    if (tlv->tag != SNMP_TAG_COUNTER64) {
+        return BER_ERR_BAD_TAG;
+    }
+    /* Up to 9 content bytes are legal: 8 value bytes plus a possible
+     * leading 0x00 pad (same rationale as the 32-bit forms above, just
+     * one width up). */
+    if (tlv->length == 0 || tlv->length > 9) {
+        return BER_ERR_OVERFLOW;
+    }
+    uint64_t value = 0;
+    for (size_t i = 0; i < tlv->length; i++) {
+        value = (value << 8) | tlv->value[i];
+    }
+    *out = value;
+    return BER_OK;
+}
+
 ber_status_t ber_decode_octet_string(const ber_tlv_t *tlv, uint8_t *out, size_t out_cap, size_t *out_len)
 {
     if (tlv == NULL || out == NULL || out_len == NULL) {

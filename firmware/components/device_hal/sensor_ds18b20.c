@@ -151,3 +151,16 @@ int sensor_read_temperature_decidegrees(int32_t *out_decidegrees)
     xSemaphoreGive(s_lock);
     return result;
 }
+
+int sensor_count(void)
+{
+    return 1; /* single-device 1-Wire bus -- see file header */
+}
+
+int sensor_read_decidegrees_indexed(uint32_t index, int32_t *out_decidegrees)
+{
+    if (index != 1) {
+        return -1;
+    }
+    return sensor_read_temperature_decidegrees(out_decidegrees);
+}

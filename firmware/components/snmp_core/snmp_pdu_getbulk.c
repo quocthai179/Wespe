@@ -15,23 +15,42 @@
 #include "mib_tree.h"
 #include <string.h>
 
+/* Deliberately smaller than, and decoupled from, SNMP_MAX_VARBINDS: that
+ * constant bounds the *response*, which legitimately grows large (one
+ * slice of a table); this one bounds `cursor[]`/`exhausted[]` below,
+ * whose cost is one entry per *repeating variable in the request*, not
+ * per response row. Real GETBULK walks name a handful of columns at
+ * most, so 16 is generous headroom while keeping this handler's stack
+ * footprint small and fixed regardless of how big SNMP_MAX_VARBINDS
+ * grows for table support (docs/PLAN-TABLES.md Phase 10). */
+#define SNMP_MAX_REPEATING_COLUMNS 16
+
 static mib_result_t getnext_into(const snmp_varbind_t *current, snmp_varbind_t *out_vb)
 {
-    const mib_object_t *obj = mib_registry_find_next(current->oid, current->oid_len);
-    if (obj == NULL) {
-        return MIB_END_OF_VIEW;
+    mib_resolved_t resolved;
+    mib_result_t r = mib_registry_resolve_next(current->oid, current->oid_len, &resolved);
+    if (r != MIB_OK) {
+        return r; /* MIB_END_OF_VIEW */
     }
-    out_vb->oid_len = obj->oid_len;
-    memcpy(out_vb->oid, obj->oid, (size_t)obj->oid_len * sizeof(uint32_t));
-    return obj->getter(out_vb);
+    out_vb->oid_len = resolved.oid_len;
+    memcpy(out_vb->oid, resolved.oid, (size_t)resolved.oid_len * sizeof(uint32_t));
+    return mib_resolved_get(&resolved, out_vb);
 }
 
-/* Appends one varbind to the in-progress response, translating a MIB
- * result into either a real value or a v2c exception tag. Returns 0 and
- * leaves `resp_count` unchanged if the response is already at capacity
+/* Appends one varbind directly into ctx->varbinds[*resp_count], translating
+ * a MIB result into either a real value or a v2c exception tag. Returns 0
+ * and leaves `resp_count` unchanged if the response is already at capacity
  * (the size-bounded-truncation behavior Phase 8 exercises) or if the
- * getter itself failed outright; returns 1 on a normal append. */
-static int append_result(snmp_varbind_t *resp, size_t *resp_count, size_t cap,
+ * getter itself failed outright; returns 1 on a normal append.
+ *
+ * Writing straight into ctx->varbinds (no separate scratch response[]
+ * array -- Phase 10, docs/PLAN-TABLES.md) is safe even when `current` IS
+ * `&ctx->varbinds[*resp_count]` (true during the non-repeating phase,
+ * where resp_count tracks the same index being read): every write here
+ * either self-copies `*current` onto itself (harmless) or overwrites with
+ * `*fetched`, a value already captured into an independent local before
+ * this call -- `current`'s old contents are never needed afterward. */
+static int append_result(snmp_varbind_t *ctx_varbinds, size_t *resp_count, size_t cap,
                           const snmp_varbind_t *current, mib_result_t res, const snmp_varbind_t *fetched)
 {
     if (*resp_count >= cap) {
@@ -43,18 +62,18 @@ static int append_result(snmp_varbind_t *resp, size_t *resp_count, size_t cap,
          * no clean per-varbind representation in this PDU type; report it
          * as endOfMibView for this slot rather than aborting the whole
          * (potentially large, already-partially-built) response. */
-        resp[*resp_count] = *current;
-        resp[*resp_count].value_tag = SNMP_TAG_END_OF_MIB_VIEW;
-        resp[*resp_count].octets_len = 0;
+        ctx_varbinds[*resp_count] = *current;
+        ctx_varbinds[*resp_count].value_tag = SNMP_TAG_END_OF_MIB_VIEW;
+        ctx_varbinds[*resp_count].octets_len = 0;
         (*resp_count)++;
         return 1;
     }
     if (tr.v2c_exception_tag != 0) {
-        resp[*resp_count] = *current;
-        resp[*resp_count].value_tag = tr.v2c_exception_tag;
-        resp[*resp_count].octets_len = 0;
+        ctx_varbinds[*resp_count] = *current;
+        ctx_varbinds[*resp_count].value_tag = tr.v2c_exception_tag;
+        ctx_varbinds[*resp_count].octets_len = 0;
     } else {
-        resp[*resp_count] = *fetched;
+        ctx_varbinds[*resp_count] = *fetched;
     }
     (*resp_count)++;
     return 1;
@@ -76,29 +95,40 @@ ber_status_t snmp_pdu_handle_getbulk(snmp_pdu_ctx_t *ctx)
     }
     size_t max_repetitions = ctx->error_index < 0 ? 0 : (size_t)ctx->error_index;
     size_t repeaters = total - non_repeaters;
+    if (repeaters > SNMP_MAX_REPEATING_COLUMNS) {
+        /* Defensive clamp, not a protocol requirement: cursor[]/exhausted[]
+         * below are fixed-size. A request naming more distinct repeating
+         * variables than this is pathological -- the excess columns are
+         * simply not repeated, rather than growing unbounded local
+         * storage to accommodate them. Phase 14's fuzz corpus exercises
+         * this. */
+        repeaters = SNMP_MAX_REPEATING_COLUMNS;
+    }
 
-    snmp_varbind_t response[SNMP_MAX_VARBINDS];
     size_t resp_count = 0;
 
-    /* Non-repeating varbinds: exactly one GetNext each. */
+    /* Non-repeating varbinds: exactly one GetNext each, written straight
+     * into ctx->varbinds in place (resp_count == i throughout this loop). */
     for (size_t i = 0; i < non_repeaters; i++) {
         snmp_varbind_t fetched;
         memset(&fetched, 0, sizeof(fetched));
         mib_result_t res = getnext_into(&ctx->varbinds[i], &fetched);
-        if (!append_result(response, &resp_count, SNMP_MAX_VARBINDS, &ctx->varbinds[i], res, &fetched)) {
+        if (!append_result(ctx->varbinds, &resp_count, SNMP_MAX_VARBINDS, &ctx->varbinds[i], res, &fetched)) {
             goto done; /* response buffer full -- truncate cleanly rather than overflow */
         }
     }
 
     /* Repeating varbinds: walk each one forward, up to max_repetitions
      * times, grouped by repetition round. `cursor[]` tracks each
-     * repeater's current position; `exhausted[]` short-circuits further
+     * repeater's current position (a copy, independent of ctx->varbinds
+     * from this point on -- see append_result's doc comment for why that
+     * makes in-place writes safe); `exhausted[]` short-circuits further
      * lookups once a repeater has already hit endOfMibView (still emits
      * the exception each remaining round, per RFC3416, but skips the
      * wasted registry search). */
     if (repeaters > 0 && max_repetitions > 0) {
-        snmp_varbind_t cursor[SNMP_MAX_VARBINDS];
-        int exhausted[SNMP_MAX_VARBINDS] = {0};
+        snmp_varbind_t cursor[SNMP_MAX_REPEATING_COLUMNS];
+        uint8_t exhausted[SNMP_MAX_REPEATING_COLUMNS] = {0};
         for (size_t r = 0; r < repeaters; r++) {
             cursor[r] = ctx->varbinds[non_repeaters + r];
         }
@@ -120,7 +150,7 @@ ber_status_t snmp_pdu_handle_getbulk(snmp_pdu_ctx_t *ctx)
                         exhausted[r] = 1;
                     }
                 }
-                if (!append_result(response, &resp_count, SNMP_MAX_VARBINDS, &cursor[r], res, &fetched)) {
+                if (!append_result(ctx->varbinds, &resp_count, SNMP_MAX_VARBINDS, &cursor[r], res, &fetched)) {
                     goto done;
                 }
             }
@@ -131,7 +161,6 @@ ber_status_t snmp_pdu_handle_getbulk(snmp_pdu_ctx_t *ctx)
     }
 
 done:
-    memcpy(ctx->varbinds, response, resp_count * sizeof(snmp_varbind_t));
     ctx->varbind_count = resp_count;
     ctx->pdu_tag = SNMP_PDU_GET_RESPONSE;
     ctx->error_status = 0;

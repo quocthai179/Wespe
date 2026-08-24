@@ -104,6 +104,38 @@ UM_TEST(test_decode_unsigned_gauge32)
     UM_CHECK(v == 0xFFFFFFFFu);
 }
 
+UM_TEST(test_decode_counter64)
+{
+    /* Counter64 max value, padded: 46 09 00 FF FF FF FF FF FF FF FF */
+    uint8_t buf[] = {SNMP_TAG_COUNTER64, 0x09, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    ber_tlv_t tlv;
+    UM_CHECK_EQ_INT(ber_decode_tlv(buf, sizeof(buf), 0, &tlv), BER_OK);
+    uint64_t v = 0;
+    UM_CHECK_EQ_INT(ber_decode_unsigned64(&tlv, &v), BER_OK);
+    UM_CHECK(v == 0xFFFFFFFFFFFFFFFFull);
+}
+
+UM_TEST(test_decode_counter64_wrong_tag)
+{
+    /* Counter32's tag must not be accepted by the 64-bit decoder -- they
+     * are wire-distinct types even though the content shape is similar. */
+    uint8_t buf[] = {SNMP_TAG_COUNTER32, 0x01, 0x05};
+    ber_tlv_t tlv;
+    UM_CHECK_EQ_INT(ber_decode_tlv(buf, sizeof(buf), 0, &tlv), BER_OK);
+    uint64_t v = 0;
+    UM_CHECK_EQ_INT(ber_decode_unsigned64(&tlv, &v), BER_ERR_BAD_TAG);
+}
+
+UM_TEST(test_decode_counter64_overflow_too_many_content_bytes)
+{
+    /* 10 content bytes exceeds the 9-byte cap (8 value bytes + 1 pad). */
+    uint8_t buf[12] = {SNMP_TAG_COUNTER64, 0x0A, 0,0,0,0,0,0,0,0,0,0};
+    ber_tlv_t tlv;
+    UM_CHECK_EQ_INT(ber_decode_tlv(buf, sizeof(buf), 0, &tlv), BER_OK);
+    uint64_t v = 0;
+    UM_CHECK_EQ_INT(ber_decode_unsigned64(&tlv, &v), BER_ERR_OVERFLOW);
+}
+
 UM_TEST(test_decode_octet_string)
 {
     uint8_t buf[] = {BER_TAG_OCTET_STRING, 5, 'h', 'e', 'l', 'l', 'o'};
@@ -192,6 +224,9 @@ int main(void)
     UM_RUN(test_decode_integer_negative);
     UM_RUN(test_decode_integer_wrong_tag);
     UM_RUN(test_decode_unsigned_gauge32);
+    UM_RUN(test_decode_counter64);
+    UM_RUN(test_decode_counter64_wrong_tag);
+    UM_RUN(test_decode_counter64_overflow_too_many_content_bytes);
     UM_RUN(test_decode_octet_string);
     UM_RUN(test_decode_octet_string_overflow);
     UM_RUN(test_decode_null);

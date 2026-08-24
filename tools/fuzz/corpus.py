@@ -11,6 +11,82 @@ from their construction; trickier ones note what they're specifically
 targeting.
 """
 
+def _ber_len(n: int) -> bytes:
+    """Definite-length BER length octets for content length `n`."""
+    if n < 0x80:
+        return bytes([n])
+    b = bytearray()
+    while n:
+        b.insert(0, n & 0xFF)
+        n >>= 8
+    return bytes([0x80 | len(b)]) + bytes(b)
+
+
+def _ber_tlv(tag: int, content: bytes) -> bytes:
+    return bytes([tag]) + _ber_len(len(content)) + content
+
+
+def _ber_pos_int(value: int, tag: int = 0x02) -> bytes:
+    """Minimal encoding for a non-negative integer (the only kind these
+    table-shaped corpus entries below need -- request-id/error-status/
+    error-index/max-repetitions are all >= 0)."""
+    if value == 0:
+        content = bytes([0])
+    else:
+        b = bytearray()
+        v = value
+        while v:
+            b.insert(0, v & 0xFF)
+            v >>= 8
+        if b[0] & 0x80:
+            b.insert(0, 0x00)  # pad so it isn't read as negative
+        content = bytes(b)
+    return _ber_tlv(tag, content)
+
+
+def _ber_oid(arcs) -> bytes:
+    """BER OID content for `arcs` (a list of ints, arbitrary precision --
+    deliberately not clamped to 32 bits, so passing an arc >= 2**32 here
+    produces a real base-128 VLQ overflow case the same way a hostile
+    packet would, without hand-deriving the byte layout."""
+    first = arcs[0] * 40 + arcs[1]
+    body = bytearray([first])
+    for arc in arcs[2:]:
+        chunk = [arc & 0x7F]
+        arc >>= 7
+        while arc:
+            chunk.insert(0, (arc & 0x7F) | 0x80)
+            arc >>= 7
+        body.extend(chunk)
+    return _ber_tlv(0x06, bytes(body))
+
+
+def _null() -> bytes:
+    return bytes([0x05, 0x00])
+
+
+def _varbind(oid_bytes: bytes, value_bytes: bytes = None) -> bytes:
+    return _ber_tlv(0x30, oid_bytes + (value_bytes if value_bytes is not None else _null()))
+
+
+def _pdu(tag: int, request_id: int, field2: int, field3: int, varbinds) -> bytes:
+    content = (
+        _ber_pos_int(request_id)
+        + _ber_pos_int(field2)
+        + _ber_pos_int(field3)
+        + _ber_tlv(0x30, b"".join(varbinds))
+    )
+    return _ber_tlv(tag, content)
+
+
+def _message(version: int, community: str, pdu_bytes: bytes) -> bytes:
+    content = _ber_pos_int(version) + _ber_tlv(0x04, community.encode("ascii")) + pdu_bytes
+    return _ber_tlv(0x30, content)
+
+
+GET_REQUEST = 0xA0
+GET_BULK_REQUEST = 0xA5
+
 CORPUS = [
     ("empty", b""),
     ("single_byte_sequence_tag", bytes([0x30])),
@@ -41,6 +117,38 @@ CORPUS = [
                 0x05, 0x00,
             ]
         ),
+    ),
+    (
+        # Table-shaped hostile input (docs/PLAN-TABLES.md Phase 14), the
+        # network-facing counterpart of host_tests/test_fuzz_corpus.c's
+        # equivalent cases -- runnable against tools/dev_agent/dev_agent.c,
+        # which has real ifTable/ifXTable/wespeSensorTable rows to walk
+        # into. Absurd row index: wespeSensorTable's entry + column 1 +
+        # the largest single-sub-identifier row index.
+        "table_cell_max_uint32_index",
+        _message(1, "public", _pdu(GET_REQUEST, 1, 0, 0, [
+            _varbind(_ber_oid([1, 3, 6, 1, 4, 1, 99999, 2, 6, 1, 1, 0xFFFFFFFF]))
+        ])),
+    ),
+    (
+        # An OID whose last arc needs more than 5 base-128 groups to
+        # encode -- unrepresentable in a uint32_t sub-identifier. Must be
+        # rejected cleanly by ber_decode_oid()'s overflow guard, not
+        # wrap/truncate/read out of bounds.
+        "oid_arc_exceeds_uint32",
+        _message(1, "public", _pdu(GET_REQUEST, 1, 0, 0, [
+            _varbind(_ber_oid([1, 3, 2**40]))
+        ])),
+    ),
+    (
+        # GETBULK with max-repetitions far exceeding any real table's
+        # size, aimed at wespeSensorTable's actual entry OID -- must
+        # truncate cleanly (SNMP_MAX_VARBINDS), not attempt to build a
+        # response sized for a million repetitions.
+        "getbulk_huge_max_repetitions_over_table",
+        _message(1, "public", _pdu(GET_BULK_REQUEST, 1, 0, 1000000, [
+            _varbind(_ber_oid([1, 3, 6, 1, 4, 1, 99999, 2, 6, 1]))
+        ])),
     ),
 ]
 
